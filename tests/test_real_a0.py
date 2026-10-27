@@ -42,6 +42,18 @@ def test_iter_filtered_bars_keeps_only_requested_codes(world):
     assert {x["short_code"] for x in bars} == {"A"} and [x["date"] for x in bars] == ["20230105", "20230106"]
 
 
+def test_last_seen_dates_finds_stocks_that_stop_appearing(world):
+    import json
+    from store.bars import last_seen_dates
+    p = config.RAW / "krx" / "ksq_daily" / "20230105.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    rows.append(test_logic.row("GONE", "폐지기업", 5000, -5000))      # 0105 에만 등장
+    p.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    seen, last_day = last_seen_dates("20230103", "20230106")
+    assert last_day == "20230106"
+    assert seen["GONE"] == "20230105" and seen["A"] == "20230106" and seen["OLD"] == "20230106"
+
+
 def test_calendar_bars_give_one_marker_per_trading_day(world):
     cal = calendar_bars("20230103", "20230106")
     assert [c["date"] for c in cal] == ["20230103", "20230104", "20230105", "20230106"]
@@ -75,6 +87,30 @@ def test_unknown_limit_up_is_reported_separately_not_counted_as_fillable(world):
     assert out["summary_ex_limit_up"]["n"] == 1           # 상한가가 아님이 확인된 건(A)만
     assert out["summary_unknown"]["n"] == 1               # 불명은 따로
     assert "상한가 불명" in Path(out["doc"]).read_text(encoding="utf-8")
+
+
+def test_delisted_stock_is_reported_and_sensitivities_include_it(world):
+    """상장일 다음 날부터 일별 데이터에서 사라진 종목은 통계에서 조용히 빠지지 않고 폐지로 보고된다."""
+    import json
+    p = config.RAW / "krx" / "ksq_daily" / "20230105.json"
+    rows = json.loads(p.read_text(encoding="utf-8"))
+    rows.append(test_logic.row("GONE", "폐지기업", 5000, -5000))          # 공모가 10,000 → 종가 5,000, 이후 사라짐
+    p.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    b.write([reg("A_ipo", "A", "20230105"), reg("LU_ipo", "LU", "20230105"), reg("G_ipo", "GONE", "20230105")],
+            b.REGISTRY_COLS, "dart_ipo_registry.csv")
+    b.write([{"ipo_id": i, "rcept_no": "R1", "rcept_dt": "20230103", "kind": "발행조건확정",
+              "available_at": b.available_at("20230103")} for i in ("A_ipo", "LU_ipo", "G_ipo")],
+            b.TERMS_COLS, "dart_offer_terms.csv")
+    out = real_a0.run("20230106")
+    by = {r["ipo_id"]: r for r in out["rows"]}
+    assert by["G_ipo"]["exit_kind"] == "폐지" and by["G_ipo"]["net_ret"] is None
+    assert out["summary_ex_limit_up"]["n"] == 1                             # 주 결과는 그대로 (폐지 건은 계산 불가)
+    assert out["exit_issues"] == {"폐지": 1}
+    a_net = by["A_ipo"]["net_ret"]
+    assert out["summary_wipeout"]["n"] == 2 and out["summary_wipeout"]["mean"] == pytest.approx((a_net - 1.0) / 2)
+    assert out["summary_last_close"]["n"] == 2 and out["summary_last_close"]["mean"] > out["summary_wipeout"]["mean"]
+    text = Path(out["doc"]).read_text(encoding="utf-8")
+    assert "폐지/거래정지" in text and "전손" in text and "마지막 종가" in text
 
 
 def test_run_writes_result_csv_and_doc(world):

@@ -21,6 +21,10 @@ class Settlement:
     buy_at_limit_up: bool | None  # None = 공모가를 몰라 판정 불가
     bench_ret: float | None
     net_ret_status: str
+    # 청산 가격이 없을 때(생존자 편향의 통로)의 사유와 민감도 값. net_ret 은 None 으로 두되 조용히 사라지지 않게 한다.
+    exit_kind: str = "정상"                     # 정상 | 거래정지 | 폐지 | 미도래(청산일이 아직 오지 않음)
+    net_ret_last_close: float | None = None     # 거래정지: 재개 후 첫 시가 / 폐지: 마지막 종가로 청산했다면
+    net_ret_wipeout: float | None = None        # 전손(-100%) 가정
 
 
 class BarIndex:
@@ -42,8 +46,28 @@ class BarIndex:
         return self.calendar[i] if i < len(self.calendar) else None
 
 
+def _net(exit_px: float, c0: float, rates: tuple) -> float:
+    fee, slip, tax = rates
+    return exit_px * (1 - fee - slip - tax) / (c0 * (1 + fee + slip)) - 1
+
+
+def _exit_fallbacks(mine: dict, d1, d0: str, c0, rates):
+    """D1 시가가 없을 때의 사유와 민감도. 이후 거래가 있으면 거래정지(재개 후 첫 시가), 없으면 폐지(마지막 종가)."""
+    if c0 is None:
+        return "정상", None, None
+    if d1 is None:
+        return "미도래", None, None             # 청산일이 아직 오지 않았다: 폐지가 아니다
+    later = sorted(d for d in mine if d > d0)
+    if later:
+        return "거래정지", _net(mine[later[0]]["open"], c0, rates), -1.0
+    return "폐지", _net(mine[d0]["close"], c0, rates), -1.0
+
+
 def settle(decision: Decision, bars, costs: dict) -> Settlement:
-    """bars 는 list[dict] 또는 미리 만든 BarIndex. 같은 bars 로 여러 번 정산할 때는 BarIndex 를 넘긴다."""
+    """bars 는 list[dict] 또는 미리 만든 BarIndex. 같은 bars 로 여러 번 정산할 때는 BarIndex 를 넘긴다.
+
+    청산 가격(D1 시가)이 없으면 net_ret 은 None(계산 불가)으로 두되, 사유(exit_kind)와 마지막 종가·전손 가정 값을 함께 남긴다.
+    통계에서 조용히 빠지면 폐지·정지 종목이 사라져 성과가 좋아 보이는 생존자 편향이 생기기 때문이다."""
     if decision.action != "매수":
         raise ValueError("매수 결정만 정산한다")
     index = bars if isinstance(bars, BarIndex) else BarIndex(bars)
@@ -58,14 +82,17 @@ def settle(decision: Decision, bars, costs: dict) -> Settlement:
 
     limit_up = (c0 >= offer * 4 * 0.999) if (c0 and offer) else None
     gross = (o1 / c0 - 1) if c0 and o1 else None
-    net, status = None, "계산 불가"
-    if gross is not None:
-        year = int(d0[:4])
+    net, status, kind, last_close, wipeout = None, "계산 불가", "정상", None, None
+    year = int(d0[:4])
+    if gross is not None or c0:
         if year not in costs["kosdaq_sell_tax"]:
             raise ValueError(f"매도세율이 없는 연도: {year}")
-        fee, slip, tax = costs["commission_per_side"], costs["slippage_per_side"], costs["kosdaq_sell_tax"][year]
-        net = o1 * (1 - fee - slip - tax) / (c0 * (1 + fee + slip)) - 1
-        status = "확인"
+    rates = (costs["commission_per_side"], costs["slippage_per_side"], costs["kosdaq_sell_tax"].get(year))
+    if gross is not None:
+        net, status = _net(o1, c0, rates), "확인"
+    else:
+        kind, last_close, wipeout = _exit_fallbacks(mine, d1, d0, c0, rates)
     i0, i1 = idx.get(d0), idx.get(d1)
     bench = (i1["open"] / i0["close"] - 1) if i0 and i1 and i0["close"] and i1["open"] else None
-    return Settlement(decision.ipo_id, decision.strategy, c0, o1, gross, net, limit_up, bench, status)
+    return Settlement(decision.ipo_id, decision.strategy, c0, o1, gross, net, limit_up, bench, status,
+                      kind, last_close, wipeout)

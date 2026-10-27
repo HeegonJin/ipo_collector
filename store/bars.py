@@ -31,6 +31,17 @@ def iter_filtered_bars(start: str, end: str, codes: set):
                        "close": num(r.get("TDD_CLSPRC")), "available_at": at}
 
 
+def last_seen_dates(start: str, end: str) -> tuple[dict, str | None]:
+    """종목별 일별 데이터 마지막 등장일과 데이터의 마지막 거래일. 마지막 거래일보다 일찍 사라진 종목은
+    상장폐지·이전 등으로 더는 거래되지 않는 것이다 (생존자 편향 점검)."""
+    seen, last_day = {}, None
+    for d, rows in _raw_days(start, end):
+        last_day = d
+        for r in rows:
+            seen[short_code(r)] = d
+    return seen, last_day
+
+
 def calendar_bars(start: str, end: str) -> list[dict]:
     return [{"date": d, "short_code": CALENDAR_CODE, "open": None, "close": None,
              "available_at": krx_daily_available_at(_day(d))} for d, _ in _raw_days(start, end)]

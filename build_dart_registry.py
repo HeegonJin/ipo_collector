@@ -31,7 +31,8 @@ from core.ids import make_ipo_id
 from core.schema import Status
 
 REGISTRY_COLS = ["ipo_id", "corp_code", "stock_code", "corp_name", "first_rcept_no", "first_rcept_dt", "sale_method",
-                 "is_ipo_candidate", "list_dd", "in_trading_universe", "universe_note", "n_filings", "last_kind",
+                 "is_ipo_candidate", "list_dd", "list_dd_source", "in_trading_universe", "universe_note", "last_seen",
+                 "delisted_after_listing", "n_filings", "last_kind",
                  "offer_price_final", "offer_price_status", "offer_price_crosscheck", "offer_price_rcept",
                  "offer_price_available_dt", "band_low", "band_high", "offer_price_note"]
 TERMS_COLS = ["ipo_id", "rcept_no", "rcept_dt", "kind", "available_at", "offer_price", "offer_price_status",
@@ -52,8 +53,20 @@ def listed_within_window(first_rcept_dt: str, list_dd: str | None) -> bool:
     return first <= listed <= first + timedelta(days=LISTING_WINDOW_DAYS)
 
 
-def krx_listing_dates(base_date: str) -> dict:
-    """corp_code → (stock_code, LIST_DD). KRX 종목기본정보가 없으면 빈 dict."""
+def _history_list_dd(code: str, d0: str) -> str | None:
+    """상장일(d0) 시점의 종목기본정보 스냅샷에서 LIST_DD. 오늘 스냅샷에 없는 종목(이후 상장폐지)을 위해 쓴다."""
+    for x in krx_api.fetch("ksq_base", d0):
+        if x["ISU_SRT_CD"] == code:
+            return x["LIST_DD"]
+    return None
+
+
+def krx_listing_dates(base_date: str, detected: dict | None = None) -> dict:
+    """corp_code → (stock_code, LIST_DD, 출처). 출처는 '현재'(base_date 스냅샷) 또는 '과거 스냅샷'.
+
+    detected 는 KRX 일별 데이터로 찾은 신규상장 {종목코드: 상장일}. 오늘의 종목기본정보에는 이미 상장폐지된 종목이 없어서
+    그대로 쓰면 폐지된 IPO 가 매매 대상에서 조용히 빠진다 → 현재 스냅샷에 없는 종목만 상장일 시점의 스냅샷에서 찾는다.
+    DART 회사코드 매핑(corpCode.xml)은 폐지 종목도 포함한다 (2026-10-27 실측)."""
     # 못 받거나 비어 있으면 매매 대상이 조용히 0건이 되므로 경고로 넘기지 않고 실패시킨다.
     try:
         rows = krx_api.fetch("ksq_base", base_date)
@@ -61,12 +74,27 @@ def krx_listing_dates(base_date: str) -> dict:
         raise RuntimeError(f"KRX ksq_base({base_date}) 종목기본정보를 받지 못함: {type(e).__name__}: {e}") from e
     if not rows:
         raise RuntimeError(f"KRX ksq_base({base_date}) 응답이 비어 있음 — 기준일이 휴장일이거나 서비스 미승인일 수 있다")
-    base = {x["ISU_SRT_CD"]: x["LIST_DD"] for x in rows}
-    by_corp = {}
-    for stock, corp in dart_api.corp_code_map().items():
-        if stock in base:
-            by_corp[corp] = (stock, base[stock])
-    return by_corp
+    base = {x["ISU_SRT_CD"]: (x["LIST_DD"], "현재") for x in rows}
+    for code, d0 in (detected or {}).items():
+        if code not in base and (dd := _history_list_dd(code, d0)):
+            base[code] = (dd, "과거 스냅샷")
+    return {corp: (stock, *base[stock]) for stock, corp in dart_api.corp_code_map().items() if stock in base}
+
+
+def universe_gaps(detected_rows: list[dict], registry: list[dict], last_seen: dict, last_day: str | None) -> list[dict]:
+    """KRX 가 신규상장으로 탐지했지만 매매 대상에 없는 종목과 그 사유 (합병·이전상장 / 신고서 없음 / 상장폐지 의심).
+    이미 제외 사유가 있는 종목(스팩·코넥스 이전)은 제외 목록이 따로 있으므로 넣지 않는다."""
+    by_stock = {r["stock_code"]: r for r in registry if r["stock_code"]}
+    out = []
+    for d in detected_rows:
+        r = by_stock.get(d["code"])
+        if d["excluded"] or (r and r["in_trading_universe"]):
+            continue
+        reason = r["universe_note"] if r else "지분증권 신고서 없음(합병·이전상장 등)"
+        if last_day and last_seen.get(d["code"], last_day) < last_day:
+            reason = "상장폐지 의심: " + reason
+        out.append({"name": d["name"], "code": d["code"], "list_date": d["list_date"], "reason": reason})
+    return out
 
 
 def _final_price(filings: list[dict], universe: bool, corp_reports: list[dict], list_dd: str) -> dict:
@@ -114,15 +142,17 @@ def universe_decision(last_pre_listing_dt: str | None, list_dd: str, sample_star
     return True, ""
 
 
-def _registry_row(ipo_id, corp, filings, estk, listing, final, universe, note="") -> dict:
+def _registry_row(ipo_id, corp, filings, estk, listing, final, universe, note="", seen=("", False)) -> dict:
     first = filings[0]
     sale_method = next((x.get("sale_method") for x in estk.values() if x.get("sale_method")), "")
-    stock, list_dd = listing
+    stock, list_dd, *src = listing
+    last_seen, delisted = seen
     return {
         "ipo_id": ipo_id, "corp_code": corp, "stock_code": stock, "corp_name": first["corp_name"],
         "first_rcept_no": first["rcept_no"], "first_rcept_dt": first["rcept_dt"], "sale_method": sale_method,
-        "is_ipo_candidate": sale_method == "일반공모", "list_dd": list_dd, "in_trading_universe": universe,
-        "universe_note": note, "n_filings": len(filings), "last_kind": filings[-1]["kind"],
+        "is_ipo_candidate": sale_method == "일반공모", "list_dd": list_dd, "list_dd_source": src[0] if src else "",
+        "in_trading_universe": universe, "universe_note": note, "last_seen": last_seen,
+        "delisted_after_listing": delisted, "n_filings": len(filings), "last_kind": filings[-1]["kind"],
         "offer_price_final": final["offer_price"], "offer_price_status": final["status"],
         "offer_price_crosscheck": final.get("crosscheck", "미실시"),
         "offer_price_rcept": final.get("rcept_no", ""), "offer_price_available_dt": final.get("available_dt"),
@@ -148,15 +178,18 @@ def _terms_rows(ipo_id, filings, estk, final) -> list[dict]:
     return rows
 
 
-def build(start: str, end: str, base_date: str, exclude: dict | None = None, sample_start: str | None = None):
-    """exclude: {종목코드: 사유} — KRX 일별 데이터로 찾은 코넥스 이전상장 등 (build_sample.excluded_listings).
-    sample_start: 이 날짜 이전 상장은 매매 대상이 아니다 (기본은 config/universe_v1.yaml)."""
+def build(start: str, end: str, base_date: str, exclude: dict | None = None, sample_start: str | None = None,
+          detected: dict | None = None, last_seen: dict | None = None, last_day: str | None = None):
+    """exclude: {종목코드: 사유} — KRX 일별 데이터로 찾은 코넥스 이전상장 등 (build_sample.detected_listings).
+    sample_start: 이 날짜 이전 상장은 매매 대상이 아니다 (기본은 config/universe_v1.yaml).
+    detected: {종목코드: 상장일} KRX 탐지 신규상장 — 상장폐지된 종목의 상장일을 과거 스냅샷에서 찾는 데 쓴다.
+    last_seen/last_day: 일별 데이터 마지막 등장일 — 상장 뒤 사라진 종목(delisted_after_listing)을 표시한다."""
     sample_start = sample_start or settings.load_universe()["sample_start"].replace("-", "")
-    exclude = exclude or {}
+    exclude, last_seen = exclude or {}, last_seen or {}
     by_corp = defaultdict(list)
     for r in dart_list.equity_registrations(start, end):
         by_corp[r["corp_code"]].append(r)
-    listing = krx_listing_dates(base_date)
+    listing = krx_listing_dates(base_date, detected)
     result_reports = dart_list.result_reports(start, end)
 
     registry, terms = [], []
@@ -168,7 +201,9 @@ def build(start: str, end: str, base_date: str, exclude: dict | None = None, sam
         universe, note = universe_decision(max(pre_dates) if pre_dates else None, corp_listing[1], sample_start,
                                            exclude.get(corp_listing[0]))
         final = _final_price(filings, universe, result_reports.get(corp, []), corp_listing[1])
-        registry.append(_registry_row(ipo_id, corp, filings, estk, corp_listing, final, universe, note))
+        seen = last_seen.get(corp_listing[0], "")
+        delisted = bool(seen and last_day and seen < last_day)
+        registry.append(_registry_row(ipo_id, corp, filings, estk, corp_listing, final, universe, note, (seen, delisted)))
         terms += _terms_rows(ipo_id, filings, estk, final)
     return registry, terms
 
@@ -189,9 +224,18 @@ if __name__ == "__main__":
     end = sys.argv[2] if len(sys.argv) > 2 else date.today().strftime("%Y%m%d")
     base_date = sys.argv[3] if len(sys.argv) > 3 else "20261026"
     sample_start = settings.load_universe()["sample_start"].replace("-", "")
-    import build_sample   # KRX 일별 raw 로 찾은 코넥스 이전상장 등 (D11)
-    reg, terms = build(start, end, base_date, exclude=build_sample.excluded_listings(base_date, sample_start),
-                       sample_start=sample_start)
+    import build_sample   # KRX 일별 raw 로 찾은 신규상장 (폐지 종목 포함)·코넥스 이전상장 등 (D11)
+    from store.bars import last_seen_dates
+    rows = build_sample.detected_listings(base_date, sample_start)
+    last_seen, last_day = last_seen_dates(config.BUFFER_START, base_date)
+    reg, terms = build(start, end, base_date, sample_start=sample_start,
+                       exclude={r["code"]: r["excluded"] for r in rows if r["excluded"]},
+                       detected={r["code"]: r["list_date"] for r in rows if not r["excluded"]},
+                       last_seen=last_seen, last_day=last_day)
+    gaps = universe_gaps(rows, reg, last_seen, last_day)
+    print(f"[DART] {write(gaps, ['name', 'code', 'list_date', 'reason'], 'universe_gaps.csv')} "
+          f"(KRX 탐지 대비 누락 {len(gaps)}건, 상장폐지 의심 {sum(g['reason'].startswith('상장폐지') for g in gaps)}건, "
+          f"대상 중 상장 뒤 사라진 종목 {sum(bool(r['delisted_after_listing']) for r in reg if r['in_trading_universe'])}건)")
     uni = [r for r in reg if r["in_trading_universe"]]
     ok = [r for r in uni if r["offer_price_status"] == Status.CONFIRMED.value]
     print(f"[DART] {write(reg, REGISTRY_COLS, 'dart_ipo_registry.csv')} ({len(reg)}곳, IPO 후보 {sum(r['is_ipo_candidate'] for r in reg)}, 매매 대상 {len(uni)}, 확정 공모가 확인 {len(ok)})")

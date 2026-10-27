@@ -18,7 +18,7 @@ def patch(monkeypatch, regs, listing, fetched, result_reports=None, result_price
     monkeypatch.setattr(b.dart_list, "result_reports", lambda s, e: result_reports or {})
     monkeypatch.setattr(b.dart_terms, "result_report_terms", lambda rcept: {
         "issue_price": result_price, "status": "확인" if result_price else "미확인"})
-    monkeypatch.setattr(b, "krx_listing_dates", lambda d: listing)
+    monkeypatch.setattr(b, "krx_listing_dates", lambda d, detected=None: listing)
     monkeypatch.setattr(b.dart_estk, "estk_for_corp",
                         # 실제 estkRs 는 발행조건확정이 아닌 가장 최신 정정본 한 건을 돌려준다
                         lambda corp, fl: [{"rcept_no": [f for f in fl if f["kind"] != "발행조건확정"][-1]["rcept_no"],
@@ -103,7 +103,62 @@ def test_empty_krx_snapshot_raises(monkeypatch):
 def test_krx_snapshot_maps_corp_to_stock_and_listing_date(monkeypatch):
     monkeypatch.setattr(b.krx_api, "fetch", lambda service, d: [{"ISU_SRT_CD": "195990", "LIST_DD": "20261023"}])
     monkeypatch.setattr(b.dart_api, "corp_code_map", lambda: {"195990": "00534729", "000000": "00000009"})
-    assert b.krx_listing_dates("20261023") == {"00534729": ("195990", "20261023")}
+    assert b.krx_listing_dates("20261023") == {"00534729": ("195990", "20261023", "현재")}
+
+
+def test_delisted_stock_gets_its_listing_date_from_the_snapshot_of_its_listing_day(monkeypatch):
+    """오늘의 종목기본정보에는 이미 상장폐지된 종목이 없다 → KRX 일별 데이터로 찾은 상장일의 스냅샷에서 LIST_DD 를 얻는다."""
+    calls = []
+
+    def fake_fetch(service, d):
+        calls.append(d)
+        if d == "20261023":
+            return [{"ISU_SRT_CD": "195990", "LIST_DD": "20261023"}]
+        if d == "20250310":
+            return [{"ISU_SRT_CD": "195990", "LIST_DD": "20081001"}, {"ISU_SRT_CD": "999999", "LIST_DD": "20250310"}]
+        return []
+
+    monkeypatch.setattr(b.krx_api, "fetch", fake_fetch)
+    monkeypatch.setattr(b.dart_api, "corp_code_map", lambda: {"195990": "00534729", "999999": "00999999"})
+    got = b.krx_listing_dates("20261023", detected={"195990": "20261001", "999999": "20250310"})
+    assert got["00999999"] == ("999999", "20250310", "과거 스냅샷")
+    assert got["00534729"] == ("195990", "20261023", "현재")
+    assert calls == ["20261023", "20250310"]        # 현재 스냅샷에 있는 종목은 과거 조회를 하지 않는다
+
+
+def test_stock_missing_from_both_snapshots_is_left_out_not_guessed(monkeypatch):
+    monkeypatch.setattr(b.krx_api, "fetch", lambda service, d: [{"ISU_SRT_CD": "195990", "LIST_DD": "20261023"}])
+    monkeypatch.setattr(b.dart_api, "corp_code_map", lambda: {"195990": "00534729", "999999": "00999999"})
+    got = b.krx_listing_dates("20261023", detected={"999999": "20250310"})
+    assert "00999999" not in got
+
+
+def test_registry_records_listing_source_and_last_seen_of_a_delisted_ipo(monkeypatch):
+    patch(monkeypatch, REGS, {"00000001": ("123456", "20261023", "과거 스냅샷")}, [])
+    (r,), _ = b.build("20260101", "20261027", "20261023", last_seen={"123456": "20261110"}, last_day="20261201")
+    assert r["list_dd_source"] == "과거 스냅샷" and r["last_seen"] == "20261110"
+    assert r["delisted_after_listing"] is True and r["in_trading_universe"] is True   # 폐지돼도 대상에서 빼지 않는다
+
+
+def test_still_trading_stock_is_not_flagged_as_delisted(monkeypatch):
+    patch(monkeypatch, REGS, {"00000001": ("123456", "20261023")}, [])
+    (r,), _ = b.build("20260101", "20261027", "20261023", last_seen={"123456": "20261201"}, last_day="20261201")
+    assert r["delisted_after_listing"] is False and r["list_dd_source"] == ""
+
+
+def test_universe_gaps_lists_krx_detected_ipos_missing_from_the_universe_with_reasons():
+    detected = [{"name": "정상", "code": "A", "list_date": "20260101", "excluded": ""},
+                {"name": "합병상장", "code": "B", "list_date": "20260201", "excluded": ""},
+                {"name": "신고없음", "code": "C", "list_date": "20260301", "excluded": ""},
+                {"name": "사라짐", "code": "D", "list_date": "20260401", "excluded": ""},
+                {"name": "스팩", "code": "S", "list_date": "20260501", "excluded": "스팩·리츠"}]
+    registry = [{"stock_code": "A", "in_trading_universe": True, "universe_note": ""},
+                {"stock_code": "B", "in_trading_universe": False, "universe_note": "상장 전 지분증권 신고서 없음"}]
+    gaps = b.universe_gaps(detected, registry, {"D": "20260601", "C": "20261201"}, "20261201")
+    by = {g["code"]: g["reason"] for g in gaps}
+    assert set(by) == {"B", "C", "D"}                                  # 정상(A)과 이미 제외된 스팩(S)은 없다
+    assert by["B"] == "상장 전 지분증권 신고서 없음" and by["C"].startswith("지분증권 신고서 없음")
+    assert by["D"].startswith("상장폐지 의심")                           # 일별 데이터에서 사라진 종목은 따로 표시
 
 
 def test_confirming_filings_after_listing_are_other_offerings_and_are_ignored(monkeypatch):

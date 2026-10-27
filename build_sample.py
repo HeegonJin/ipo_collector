@@ -221,13 +221,17 @@ def write_outputs(rows, tag):
     return out
 
 
+def detected_listings(end: str, sample_start: str) -> list[dict]:
+    """KRX 일별 데이터로 찾은 신규 종목 전체 (제외 사유 포함). 일별 데이터는 폐지 종목도 폐지일까지 담고 있다."""
+    ksq = load_days("ksq_daily", config.BUFFER_START, end)
+    knx = load_days("knx_daily", config.BUFFER_START, end)
+    return detect_listings(ksq, knx, sample_start.replace("-", ""))
+
+
 def excluded_listings(end: str, sample_start: str) -> dict:
     """KRX 일별 데이터로 찾은 신규 종목 중 제외 사유가 있는 것 {종목코드: 사유} (스팩·리츠, 코넥스 이전상장).
     DART 쪽 매매 대상에서 코넥스 이전상장을 빼는 데 쓴다 (D11)."""
-    ksq = load_days("ksq_daily", config.BUFFER_START, end)
-    knx = load_days("knx_daily", config.BUFFER_START, end)
-    sample_start = sample_start.replace("-", "")
-    return {r["code"]: r["excluded"] for r in detect_listings(ksq, knx, sample_start) if r["excluded"]}
+    return {r["code"]: r["excluded"] for r in detected_listings(end, sample_start) if r["excluded"]}
 
 
 def load_list_dd(base_date: str) -> dict:

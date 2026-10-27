@@ -58,5 +58,18 @@ def test_excluded_listings_returns_code_to_reason_for_spac_and_konex_transfers(m
     assert got == {"SP": "스팩·리츠", "KNX1": "코넥스 이전상장"}      # 정상 신규상장 A, 상한가 LU 는 없다
 
 
+def test_detected_listings_returns_every_detected_row_with_its_exclusion(monkeypatch, tmp_path):
+    """건강 점검과 과거 스냅샷 조회에는 제외 건뿐 아니라 탐지된 전체 목록(이름·상장일 포함)이 필요하다."""
+    import config
+    import test_logic
+    for name in ("RAW", "MART", "META", "ROOT", "BUFFER_START", "SAMPLE_START"):
+        monkeypatch.setattr(config, name, getattr(config, name))
+    test_logic.setup(tmp_path)
+    rows = {r["code"]: r for r in build_sample.detected_listings("20230106", "20230105")}
+    assert set(rows) == {"A", "SP", "KNX1", "LU"}
+    assert rows["A"]["excluded"] == "" and rows["A"]["list_date"] == "20230105" and rows["A"]["name"] == "엘리스테스트"
+    assert rows["SP"]["excluded"] == "스팩·리츠" and rows["KNX1"]["excluded"] == "코넥스 이전상장"
+
+
 def test_new_columns_are_written_to_the_sample_csv():
     assert {"list_dd", "list_dd_check"} <= set(build_sample.COLUMNS)

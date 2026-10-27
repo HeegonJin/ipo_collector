@@ -7,6 +7,7 @@
 공모가를 몰라 판정할 수 없는 건은 따로 보고하며, '전부 체결' 값은 민감도로 함께 낸다.
 코스닥 지수가 승인 전이면 기준선은 계산 불가로 표시한다.
 """
+import collections
 import csv
 import statistics as st
 import sys
@@ -22,7 +23,7 @@ from store.bars import calendar_bars, iter_filtered_bars
 from store.facts import facts_from_registry
 
 ROW_COLS = ["ipo_id", "short_code", "list_date", "offer_price", "entry_px", "exit_px", "gross_ret", "net_ret",
-            "buy_at_limit_up", "bench_ret", "net_ret_status"]
+            "buy_at_limit_up", "bench_ret", "net_ret_status", "exit_kind", "net_ret_last_close", "net_ret_wipeout"]
 
 
 def _rows(results):
@@ -58,7 +59,18 @@ def _summaries(rows):
         "summary": net(usable), "summary_ex_limit_up": net(known_not_limit), "summary_unknown": net(unknown),
         "gross": report.summarize([r["gross_ret"] for r in usable]),
         "bench": report.summarize([r["bench_ret"] for r in usable]),
+        "exit_issues": dict(collections.Counter(r["exit_kind"] for r in rows if r["exit_kind"] != "정상")),
+        "summary_last_close": _with_fallback(rows, "net_ret_last_close"),
+        "summary_wipeout": _with_fallback(rows, "net_ret_wipeout"),
     }
+
+
+def _with_fallback(rows, key):
+    """주 결과와 같은 기준(상한가 아님 확인 건)에 폐지·거래정지 건을 민감도 값으로 채워 넣은 요약.
+    청산일이 아직 오지 않은 건(미도래)은 폐지가 아니므로 넣지 않는다."""
+    vals = [r["net_ret"] if r["net_ret"] is not None else r[key] for r in rows
+            if r["buy_at_limit_up"] is False and (r["net_ret"] is not None or r[key] is not None)]
+    return report.summarize(vals)
 
 
 def _sensitivity(ipo_ids, facts, bars, costs):
@@ -87,6 +99,8 @@ def _render_doc(rows, sm, sensitivity, costs):
     bench_text = ("계산 불가 — 코스닥 지수 서비스(kosdaq_dd_trd) 미승인으로 수집하지 못함" if not bench
                   else f"평균 {report.pct(bench['mean'])} (n={bench['n']})")
     sens = "\n".join(f"- 편도 {k * 100:.2f}%: {report.pct(v)}" for k, v in sensitivity.items()) or "- 설정 없음"
+    issues = sm["exit_issues"]
+    issues_text = ", ".join(f"{k} {v}건" for k, v in issues.items()) or "없음 (폐지/거래정지 0건)"
     return f"""# A0 기준선 결과 (실데이터) — 상장일 종가 매수 → 다음 거래일 시가 매도
 
 작성 {date.today()} · 자동 생성 초안 · 근거 D5, D7, D11, D12
@@ -110,6 +124,15 @@ def _render_doc(rows, sm, sensitivity, costs):
 {_line('비용 차감 후 · 상한가 불명(공모가 미확인)', sm['summary_unknown'])}
 {_line('비용 차감 후 · 전부 체결 가정', sm['summary'])}
 {_line('비용 차감 전 · 전부 체결 가정', sm['gross'])}
+
+## 폐지/거래정지/청산 미도래 (생존자 편향 점검)
+- 청산 가격이 없는 건: {issues_text}. 이 건들은 주 결과에서 계산 불가로 빠지지만 아래 민감도로 되돌려 넣어 본다.
+- 거래정지는 재개 후 첫 시가, 폐지는 마지막 종가로 청산했다고 가정한 값과 전손(-100%) 가정 값이다. 청산 미도래는 넣지 않는다.
+
+| 구분 | 건수 | 평균(기대값) | 중앙값 | 승률 | 평균 수익 / 평균 손실 | 하위 10% | 최대 손실 |
+|---|---|---|---|---|---|---|---|
+{_line('주 결과 + 폐지/정지 마지막 종가(재개 시가) 청산', sm['summary_last_close'])}
+{_line('주 결과 + 폐지/정지 전손(-100%) 가정', sm['summary_wipeout'])}
 
 ## 코스닥 기준선
 - {bench_text}
@@ -136,7 +159,9 @@ def run(end: str, start: str | None = None) -> dict:
     doc = out_dir / f"{date.today()}_A0_real_v1.md"
     doc.write_text(_render_doc(rows, sm, sensitivity, costs), encoding="utf-8")
     return {"rows": rows, "summary": sm["summary"], "summary_ex_limit_up": sm["summary_ex_limit_up"],
-            "summary_unknown": sm["summary_unknown"], "sensitivity": sensitivity, "csv": str(out_csv), "doc": str(doc)}
+            "summary_unknown": sm["summary_unknown"], "exit_issues": sm["exit_issues"],
+            "summary_last_close": sm["summary_last_close"], "summary_wipeout": sm["summary_wipeout"],
+            "sensitivity": sensitivity, "csv": str(out_csv), "doc": str(doc)}
 
 
 if __name__ == "__main__":
