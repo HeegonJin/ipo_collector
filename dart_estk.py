@@ -11,11 +11,10 @@ import json
 import re
 import time
 
-import requests
-
 import config
+from core import http
 
-API = "https://opendart.fss.or.kr/api"
+API ="https://opendart.fss.or.kr/api"
 _DATE = re.compile(r"(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일")
 
 
@@ -70,9 +69,8 @@ def normalize(resp: dict) -> list[dict]:
 
 
 def fetch_estk(corp_code: str, bgn: str, end: str) -> dict:
-    r = requests.get(f"{API}/estkRs.json", timeout=30, params={
+    r = http.safe_get(f"{API}/estkRs.json", params={
         "crtfc_key": config.DART_API_KEY, "corp_code": corp_code, "bgn_de": bgn, "end_de": end})
-    r.raise_for_status()
     j = r.json()
     if j.get("status") not in ("000", "013"):
         raise RuntimeError(f"DART estkRs 오류 {j.get('status')} ({corp_code}): {j.get('message')}")

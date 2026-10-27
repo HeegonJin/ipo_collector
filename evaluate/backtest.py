@@ -8,7 +8,7 @@ from datetime import datetime
 from core.schema import Fact
 from core.tradingcal import KST
 from decide.runner import Decision, run_decision_point
-from evaluate.outcomes import Settlement, settle
+from evaluate.outcomes import BarIndex, Settlement, settle
 from strategies.a0 import DECISION_TIME
 
 
@@ -24,10 +24,12 @@ def decision_points(ipo_ids: list[str], facts: list[Fact]) -> dict:
     return dict(sorted(points.items()))
 
 
-def run_a0(ipo_ids: list[str], facts: list[Fact], bars: list[dict], costs: dict) -> list[tuple[Decision, Settlement]]:
+def run_a0(ipo_ids: list[str], facts: list[Fact], bars, costs: dict) -> list[tuple[Decision, Settlement]]:
+    """bars 는 list[dict] 또는 BarIndex. 색인은 백테스트 한 번에 한 번만 만든다 (여러 번 돌릴 때는 BarIndex 를 넘긴다)."""
+    index = bars if isinstance(bars, BarIndex) else BarIndex(bars)
     out = []
     for as_of, ids in decision_points(ipo_ids, facts).items():
-        for d in run_decision_point(as_of, ids, facts, bars):
+        for d in run_decision_point(as_of, ids, facts, index.bars):
             if d.action == "매수":
-                out.append((d, settle(d, bars, costs)))
+                out.append((d, settle(d, index, costs)))
     return out

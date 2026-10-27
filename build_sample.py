@@ -129,6 +129,27 @@ def detect_listings(ksq_days, knx_days, sample_start):
     return result
 
 
+def apply_listing_crosscheck(rows, list_dd_by_code: dict):
+    """일별 데이터에 처음 나타난 날(D0)을 KRX 종목기본정보의 상장일(LIST_DD)과 대조한다.
+
+    거래정지 등으로 일별 데이터에서 빠졌다가 다시 나타난 기존 종목은 D0 가 LIST_DD 보다 훨씬 늦어 신규상장으로 오인된다.
+    종목기본정보는 현재 상장 종목의 스냅샷이라 상장폐지 종목은 없다 → 스냅샷에 없으면 '미실시'로 두고 제외하지 않는다.
+    이미 다른 사유로 제외된 행은 그 사유를 유지한다."""
+    for r in rows:
+        list_dd = list_dd_by_code.get(r["code"])
+        if not list_dd:
+            r["list_dd"], r["list_dd_check"] = "", "미실시"
+            continue
+        r["list_dd"] = list_dd
+        if list_dd == r["list_date"]:
+            r["list_dd_check"] = "일치"
+        else:
+            r["list_dd_check"] = "불일치"
+            if not r["excluded"]:
+                r["excluded"] = "재등장 의심(상장일 불일치)"
+    return rows
+
+
 def apply_experiment(rows, idx):
     for r in rows:
         offer, c0, o1 = r["offer_price_est"], r["d0_close"], r["d1_open"]
@@ -166,7 +187,7 @@ PENDING_COLUMNS = {
     "macro_regime": "SM 매크로 에이전트 JSON (국면별 기록용)",
 }
 
-COLUMNS = ["code", "short_code", "name", "list_date", "sect", "excluded",
+COLUMNS = ["code", "short_code", "name", "list_date", "list_dd", "list_dd_check", "sect", "excluded",
            "offer_price_est", "d0_open", "d0_high", "d0_low", "d0_close", "d0_close_vs_offer",
            "d0_volume", "d0_value", "d0_mktcap", "list_shares", "buy_at_limit_up",
            "d1_date", "d1_open", "gross_ret", "net_ret", "kosdaq_d0_chg_pct", "kosdaq_overnight",
@@ -200,12 +221,24 @@ def write_outputs(rows, tag):
     return out
 
 
-def build(end: str, sample_start: str | None = None, tag: str = "all"):
+def load_list_dd(base_date: str) -> dict:
+    """KRX 종목기본정보 스냅샷 → {종목코드: 상장일}. 못 받으면 조용히 건너뛰지 않고 실패한다."""
+    import krx_api
+    rows = krx_api.fetch("ksq_base", base_date)
+    if not rows:
+        raise RuntimeError(f"KRX ksq_base({base_date}) 응답이 비어 있음 — 상장일 교차검증을 할 수 없다")
+    return {r["ISU_SRT_CD"]: r["LIST_DD"] for r in rows}
+
+
+def build(end: str, sample_start: str | None = None, tag: str = "all", list_dd: dict | None = None):
+    """list_dd 를 주면 일별 데이터로 찾은 상장일을 그 값(KRX 종목기본정보)과 대조한다. 안 주면 대조하지 않고 '미실시'로 남긴다."""
     sample_start = sample_start or config.SAMPLE_START
     ksq = load_days("ksq_daily", config.BUFFER_START, end)
     knx = load_days("knx_daily", config.BUFFER_START, end)
     idx = kosdaq_index(load_days("kosdaq_idx", config.BUFFER_START, end))
-    rows = apply_experiment(detect_listings(ksq, knx, sample_start), idx)
+    rows = detect_listings(ksq, knx, sample_start)
+    rows = apply_listing_crosscheck(rows, list_dd or {})
+    rows = apply_experiment(rows, idx)
     out = write_outputs(rows, tag)
     print(f"[표본] {out} ({len(rows)}건, 제외 {sum(1 for r in rows if r['excluded'])}건)")
     return rows
@@ -216,4 +249,4 @@ if __name__ == "__main__":
     from datetime import date, timedelta
     end = sys.argv[1] if len(sys.argv) > 1 else (date.today() - timedelta(days=1)).strftime("%Y%m%d")
     start = sys.argv[2] if len(sys.argv) > 2 else config.SAMPLE_START
-    build(end, start, tag=f"{start}_{end}")
+    build(end, start, tag=f"{start}_{end}", list_dd=load_list_dd(end))

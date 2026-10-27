@@ -20,11 +20,10 @@ import zipfile
 import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 
-import requests
-
 import config
+from core import http
 
-API = "https://opendart.fss.or.kr/api"
+API ="https://opendart.fss.or.kr/api"
 DOC_KEYWORDS = {
     "registration": "증권신고서(지분증권)",
     "final_terms": "발행조건확정",
@@ -35,8 +34,7 @@ DOC_KEYWORDS = {
 
 def _get(path, **params):
     params["crtfc_key"] = config.DART_API_KEY
-    r = requests.get(f"{API}/{path}", params=params, timeout=30)
-    r.raise_for_status()
+    r = http.safe_get(f"{API}/{path}", params=params)
     time.sleep(0.2)
     return r
 

@@ -3,10 +3,15 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import build_sample  # noqa: E402
 
 FX = Path(__file__).parent / "fixtures_real"
+# 실제 응답 발췌는 이용약관 확인 전이라 저장소에 올리지 않는다(.gitignore). 새로 클론하면 없으므로 실패가 아니라 건너뛴다.
+pytestmark = pytest.mark.skipif(not (FX / "krx_ksq_daily_20261015.json").exists(),
+                                reason="tests/fixtures_real 은 로컬 전용(저장소에 없음)")
 DAILY_FIELDS = {"BAS_DD", "ISU_CD", "ISU_NM", "MKT_NM", "SECT_TP_NM", "TDD_CLSPRC", "CMPPREVDD_PRC", "FLUC_RT",
                 "TDD_OPNPRC", "TDD_HGPRC", "TDD_LWPRC", "ACC_TRDVOL", "ACC_TRDVAL", "MKTCAP", "LIST_SHRS"}
 BASE_FIELDS = {"ISU_CD", "ISU_SRT_CD", "ISU_NM", "ISU_ABBRV", "ISU_ENG_NM", "LIST_DD", "MKT_TP_NM", "SECUGRP_NM",

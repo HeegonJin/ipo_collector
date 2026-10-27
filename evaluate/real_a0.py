@@ -16,6 +16,7 @@ import config
 import report
 from core import settings
 from evaluate.backtest import run_a0
+from evaluate.outcomes import BarIndex
 from store.bars import calendar_bars, iter_filtered_bars
 from store.facts import facts_from_registry
 
@@ -45,7 +46,7 @@ def run(end: str, start: str | None = None) -> dict:
     facts = facts_from_registry(mart / "dart_ipo_registry.csv", mart / "dart_offer_terms.csv")
     ipo_ids = sorted({f.ipo_id for f in facts if f.var == "listing_date"})
     codes = {f.value_text for f in facts if f.var == "short_code"}
-    bars = list(iter_filtered_bars(start, end, codes)) + calendar_bars(start, end)
+    bars = BarIndex(list(iter_filtered_bars(start, end, codes)) + calendar_bars(start, end))  # 민감도 실행까지 한 번만
     years = sorted({int(f.value_text[:4]) for f in facts if f.var == "listing_date"})
     costs = settings.load_costs(years[0], years[-1]) if years else settings.load_costs(2023, 2023)
 

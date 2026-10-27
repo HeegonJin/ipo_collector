@@ -11,15 +11,15 @@ import krx_api  # noqa: E402
 
 
 class FakeResp:
-    def __init__(self, status=200, rows=None):
-        self.status_code, self._rows = status, rows or []
+    def __init__(self, status=200, rows=None, body=None):
+        self.status_code, self._rows, self._body = status, rows or [], body
 
     def raise_for_status(self):
         if self.status_code >= 400:
             raise requests.HTTPError(response=self)
 
     def json(self):
-        return {"OutBlock_1": self._rows}
+        return self._body if self._body is not None else {"OutBlock_1": self._rows}
 
 
 @pytest.fixture
@@ -46,6 +46,19 @@ def test_empty_response_for_old_date_is_cached_as_holiday(env, monkeypatch):
     monkeypatch.setattr(krx_api.requests, "get", lambda *a, **k: FakeResp(rows=[]))
     assert krx_api.fetch("ksq_daily", "20230102") == []
     assert krx_api._cache_path("ksq_daily", "20230102").exists()
+
+
+def test_response_without_outblock_is_an_error_not_a_cached_holiday(env, monkeypatch):
+    monkeypatch.setattr(krx_api.requests, "get", lambda *a, **k: FakeResp(body={"respMsg": "rate limited"}))
+    with pytest.raises(RuntimeError, match="rate limited"):
+        krx_api.fetch("ksq_daily", "20230103")                       # 오래된 날짜여도 휴장일로 굳으면 안 된다
+    assert not krx_api._cache_path("ksq_daily", "20230103").exists()
+
+
+def test_transient_server_error_is_retried(env, monkeypatch):
+    seq = iter([FakeResp(status=503), FakeResp(rows=[{"ISU_CD": "0158S0"}])])
+    monkeypatch.setattr(krx_api.requests, "get", lambda *a, **k: next(seq))
+    assert krx_api.fetch("ksq_daily", "20230103") == [{"ISU_CD": "0158S0"}]
 
 
 def test_cached_date_is_not_refetched(env, monkeypatch):

@@ -3,6 +3,7 @@
 비용은 호출자가 넘긴다 (config/costs_v1.yaml 의 dict, 또는 같은 모양의 dict).
 매도세 연도가 없으면 None 을 내지 않고 예외를 낸다.
 """
+import bisect
 from dataclasses import dataclass
 
 from decide.runner import Decision
@@ -22,18 +23,34 @@ class Settlement:
     net_ret_status: str
 
 
-def _by_date(bars: list[dict], code: str) -> dict:
-    return {b["date"]: b for b in bars if b["short_code"] == code}
+class BarIndex:
+    """bars 를 한 번만 훑어 종목별 {날짜: bar} 와 정렬된 거래일 달력을 만든다 (정산마다 전체를 다시 훑지 않도록).
+    거래일 달력은 모든 bars 의 날짜 합집합이라 지수가 없어도(승인 전) D1 을 찾을 수 있다."""
+
+    def __init__(self, bars: list[dict]):
+        self.bars = bars
+        self.by_code: dict[str, dict[str, dict]] = {}
+        for b in bars:
+            self.by_code.setdefault(b["short_code"], {})[b["date"]] = b
+        self.calendar = sorted({b["date"] for b in bars})
+
+    def code(self, short_code: str) -> dict:
+        return self.by_code.get(short_code, {})
+
+    def next_day(self, d: str):
+        i = bisect.bisect_right(self.calendar, d)
+        return self.calendar[i] if i < len(self.calendar) else None
 
 
-def settle(decision: Decision, bars: list[dict], costs: dict) -> Settlement:
+def settle(decision: Decision, bars, costs: dict) -> Settlement:
+    """bars 는 list[dict] 또는 미리 만든 BarIndex. 같은 bars 로 여러 번 정산할 때는 BarIndex 를 넘긴다."""
     if decision.action != "매수":
         raise ValueError("매수 결정만 정산한다")
+    index = bars if isinstance(bars, BarIndex) else BarIndex(bars)
     d0 = decision.listing_date
-    idx = _by_date(bars, INDEX_CODE)
-    # 거래일 달력은 모든 bars 의 날짜. 지수가 없어도(승인 전) D1 을 찾을 수 있다.
-    d1 = next((d for d in sorted({b["date"] for b in bars}) if d > d0), None)
-    mine = _by_date(bars, decision.short_code)
+    idx = index.code(INDEX_CODE)
+    d1 = index.next_day(d0)
+    mine = index.code(decision.short_code)
     b0, b1 = mine.get(d0), mine.get(d1)
     c0 = b0["close"] if b0 else None
     o1 = b1["open"] if b1 else None

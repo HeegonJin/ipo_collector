@@ -15,6 +15,15 @@ def test_costs_cover_sample_years():
     assert 0.002 in costs["slippage_sensitivity"]
 
 
+def test_legacy_config_constants_come_from_the_costs_yaml():
+    """비용 가정이 config.py 와 yaml 두 곳에 따로 있으면 결과 문서마다 가정이 어긋난다 → 출처는 yaml 하나."""
+    import config
+    costs = settings.load_costs(2023, 2026)
+    assert config.COMMISSION_PER_SIDE == costs["commission_per_side"]
+    assert config.SLIPPAGE_PER_SIDE == costs["slippage_per_side"]
+    assert config.KOSDAQ_SELL_TAX == costs["kosdaq_sell_tax"]
+
+
 def test_missing_tax_year_fails_loudly():
     with pytest.raises(ValueError, match="2027"):
         settings.load_costs(2023, 2027)

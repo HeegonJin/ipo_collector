@@ -17,14 +17,15 @@ import io
 import re
 import zipfile
 
-import requests
-
 import config
+from core import http
 from core.schema import Status
 
 API = "https://opendart.fss.or.kr/api"
-_ROW = re.compile(
-    r"모집\(매출\)\s*방법\s*(?:기명식\s*)?보통주\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)\s+(\S+)")
+_KIND = r"(보통주|[가-힣]{0,10}우선주|[가-힣]{0,10}종류주식)"
+_HEADER = re.compile(r"모집\(매출\)\s*방법\s*")
+# 종류 | 수량 | 액면가 | 모집(매출)가액 | 모집(매출)총액 | 방법  (표 머리글 바로 뒤에 이어지는 행들)
+_ROW = re.compile(rf"(?:(?:기명식|무기명식)\s*)?{_KIND}\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)\s+(\S+)\s*")
 _BAND = re.compile(r"(?:공모희망가액|희망공모가액)[^\d]{0,40}([\d,]+)\s*원\s*~\s*([\d,]+)\s*원")
 _SENT = re.compile(r"확정\s*공모가액(?:은|인|이)?\s*([\d,]+)\s*원|([\d,]+)\s*원으로\s*(?:최종\s*)?(?:확정|결정)")
 _TAG = re.compile(r"정정\s*(전|후)")
@@ -38,18 +39,29 @@ def to_text(xml: str) -> str:
     return re.sub(r"\s+", " ", html.unescape(re.sub(r"<[^>]+>", " ", xml)))
 
 
-def _tagged_tables(text: str) -> list[tuple[str | None, tuple]]:
+def _tagged_tables(text: str) -> list[tuple[str | None, list[tuple]]]:
+    """공모개요 표들. 각 표는 ('전'|'후'|None, [행 튜플...]). 머리글 바로 뒤에 이어지는 행만 그 표의 행으로 본다."""
     out = []
-    for m in _ROW.finditer(text):
-        tags = _TAG.findall(text[max(0, m.start() - 220): m.start()])
-        out.append((tags[-1] if tags else None, m.groups()))
+    for h in _HEADER.finditer(text):
+        pos, rows = h.end(), []
+        while (m := _ROW.match(text, pos)):
+            rows.append(m.groups())
+            pos = m.end()
+        if rows:
+            tags = _TAG.findall(text[max(0, h.start() - 220): h.start()])
+            out.append((tags[-1] if tags else None, rows))
     return out
+
+
+def _pick_row(rows: list[tuple]) -> tuple:
+    """한 표에 종류가 여럿이면 보통주 행을 우선한다."""
+    return next((r for r in rows if r[0] == "보통주"), rows[0])
 
 
 def parse_offer_terms(text: str) -> dict:
     band = _BAND.search(text)
     sent = {_n(a or b) for a, b in _SENT.findall(text)}
-    out = {"offer_price": None, "stock_cnt": None, "offer_amount": None, "sale_method": None,
+    out = {"offer_price": None, "stock_kind": None, "stock_cnt": None, "offer_amount": None, "sale_method": None,
            "band_low": _n(band.group(1)) if band else None, "band_high": _n(band.group(2)) if band else None,
            "sentence_prices": sorted(sent), "note": "", "status": Status.UNVERIFIED.value}
     tables = _tagged_tables(text)
@@ -59,8 +71,8 @@ def parse_offer_terms(text: str) -> dict:
     if chosen is None:
         out["note"] = "정정 후 표 없음" if tables else "공모개요 표 없음"
         return out
-    cnt, _fv, price, total, method = chosen
-    out.update(stock_cnt=_n(cnt), offer_price=_n(price), offer_amount=_n(total), sale_method=method)
+    kind, cnt, _fv, price, total, method = _pick_row(chosen)
+    out.update(stock_kind=kind, stock_cnt=_n(cnt), offer_price=_n(price), offer_amount=_n(total), sale_method=method)
     if abs(_n(cnt) * _n(price) - _n(total)) >= 1:
         out["note"] = "수량×가액≠총액"
     elif sent and _n(price) not in sent:
@@ -74,10 +86,9 @@ def fetch_document_xml(rcept_no: str) -> str:
     path = config.RAW / "dart" / "doc" / f"{rcept_no}.xml"
     if path.exists():
         return path.read_text(encoding="utf-8")
-    r = requests.get(f"{API}/document.xml", params={"crtfc_key": config.DART_API_KEY, "rcept_no": rcept_no}, timeout=60)
-    r.raise_for_status()
+    r = http.safe_get(f"{API}/document.xml", params={"crtfc_key": config.DART_API_KEY, "rcept_no": rcept_no}, timeout=60)
     if not r.content.startswith(b"PK"):  # 오류는 zip 이 아니라 XML 메시지로 온다
-        raise RuntimeError(f"DART document.xml 오류 ({rcept_no}): {r.text[:200]}")
+        raise RuntimeError(http.scrub(f"DART document.xml 오류 ({rcept_no}): {r.text[:200]}"))
     z = zipfile.ZipFile(io.BytesIO(r.content))
     xml = z.read(z.namelist()[0]).decode("utf-8", errors="replace")
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -87,6 +98,45 @@ def fetch_document_xml(rcept_no: str) -> str:
 
 def offer_terms_for(rcept_no: str) -> dict:
     return parse_offer_terms(to_text(fetch_document_xml(rcept_no)))
+
+
+_RESULT_ROW = re.compile(rf"모집\s+(?:(?:기명식|무기명식)\s*)?{_KIND}\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)")
+
+
+def parse_result_report(text: str) -> dict:
+    """증권발행실적보고서의 '자금조달 내용' 표: 신고서상발행예정총액 | 발행가액 | 수량 | 발행총액.
+    발행가액은 실제로 청약·납입된 가격이라 발행조건확정 공시의 '예정' 표기보다 믿을 수 있다 (진코스텍 사례)."""
+    out = {"issue_price": None, "stock_cnt": None, "issue_amount": None, "status": Status.UNVERIFIED.value}
+    rows = _RESULT_ROW.findall(text)
+    if not rows:
+        return out
+    ok = [r for r in rows if abs(_n(r[2]) * _n(r[3]) - _n(r[4])) < 1]
+    pool = ok or rows
+    _kind, _planned, price, cnt, amount = next((r for r in pool if r[0] == "보통주"), pool[0])
+    out.update(issue_price=_n(price), stock_cnt=_n(cnt), issue_amount=_n(amount))
+    if ok:
+        out["status"] = Status.CONFIRMED.value
+    return out
+
+
+def reconcile(final: dict, result: dict | None) -> dict:
+    """확정 공시 값과 실적보고서 발행가액을 대조한다. 다르면 확인을 미확인으로 내리고 두 값을 메모에 남긴다.
+    실적보고서가 없거나 읽지 못하면 '미실시'로 두고 상태는 그대로 둔다. 미확인을 확인으로 올리지는 않는다."""
+    out = {**final, "crosscheck": "미실시"}
+    if not result or result.get("issue_price") is None or result.get("status") != Status.CONFIRMED.value:
+        return out
+    if final.get("offer_price") is None:
+        return out
+    if final["offer_price"] == result["issue_price"]:
+        out["crosscheck"] = "일치"
+        return out
+    out.update(crosscheck="불일치", status=Status.UNVERIFIED.value,
+               note=f"실적보고서 {int(result['issue_price'])} ≠ 확정공시 {int(final['offer_price'])}")
+    return out
+
+
+def result_report_terms(rcept_no: str) -> dict:
+    return parse_result_report(to_text(fetch_document_xml(rcept_no)))
 
 
 def final_offer_terms(rcept_nos: list[str]) -> dict:

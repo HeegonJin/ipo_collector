@@ -10,8 +10,15 @@ DECISION_PACKAGES = ("decide", "strategies")  # modules/ 가 생기면 여기에
 FORBIDDEN_IMPORT_ROOTS = {
     "evaluate", "store", "config", "build_sample", "krx_api", "dart_api", "dart_list", "dart_estk", "dart_terms",
     "build_dart_registry", "report", "requests", "csv", "json", "pathlib", "os", "shutil", "sqlite3", "pandas", "numpy",
+    # 현재 시각·난수·프로세스·네트워크·동적 import: 판단은 as_of 와 PitReader 만으로 결정돼야 한다
+    "time", "random", "subprocess", "socket", "urllib", "http", "importlib", "ctypes",
 }
-FORBIDDEN_CALLS = {"open", "read_text", "read_bytes", "read_csv", "read_json", "read_parquet"}
+FORBIDDEN_CALLS = {
+    "open", "read_text", "read_bytes", "read_csv", "read_json", "read_parquet",
+    "now", "today", "utcnow",                                   # 시계 (datetime.now() 등)
+    "__import__", "import_module", "eval", "exec", "compile",   # 동적 코드
+    "urlopen", "system", "Popen",
+}
 
 
 def find_violations(source: str) -> list[str]:

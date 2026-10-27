@@ -18,8 +18,9 @@ from datetime import date, datetime, timedelta
 import requests
 
 import config
+from core import http
 
-BASE = "https://data-dbg.krx.co.kr/svc/apis"  # VERIFY
+BASE ="https://data-dbg.krx.co.kr/svc/apis"  # VERIFY
 SERVICES = {
     "ksq_daily": "sto/ksq_bydd_trd",       # 코스닥 일별매매정보 (VERIFY)
     "knx_daily": "sto/knx_bydd_trd",       # 코넥스 일별매매정보 (VERIFY)
@@ -44,14 +45,18 @@ def fetch(service: str, bas_dd: str, refresh: bool = False) -> list[dict]:
 
     if not config.KRX_API_KEY:
         raise RuntimeError(".env 에 KRX_API_KEY 가 없습니다.")
-    resp = requests.get(
+    resp = http.safe_get(
         f"{BASE}/{SERVICES[service]}",
         headers={"AUTH_KEY": config.KRX_API_KEY},
         params={"basDd": bas_dd},
         timeout=20,
     )
-    resp.raise_for_status()
-    rows = resp.json().get("OutBlock_1", [])
+    body = resp.json()
+    # 정상 응답은 휴장일에도 {"OutBlock_1": []} 로 키를 가진다 (2026-10-27 실측). 키가 없으면 오류 본문이므로
+    # 빈 목록으로 보고 휴장일로 캐시하면 안 된다.
+    if "OutBlock_1" not in body:
+        raise RuntimeError(f"KRX 응답에 OutBlock_1 이 없음 ({service} {bas_dd}): {http.scrub(str(body)[:200])}")
+    rows = body["OutBlock_1"]
     time.sleep(CALL_INTERVAL_SEC)
     # 당일·직전 자료는 아직 올라오지 않아 빈 응답일 수 있다 (2026-10-27 18:31 실측). 빈 응답을 캐시하면 영영 못 받는다.
     if not rows and bas_dd >= (date.today() - timedelta(days=RECENT_EMPTY_DAYS)).strftime("%Y%m%d"):

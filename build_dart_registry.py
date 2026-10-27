@@ -31,8 +31,8 @@ from core.schema import Status
 
 REGISTRY_COLS = ["ipo_id", "corp_code", "stock_code", "corp_name", "first_rcept_no", "first_rcept_dt", "sale_method",
                  "is_ipo_candidate", "list_dd", "in_trading_universe", "n_filings", "last_kind",
-                 "offer_price_final", "offer_price_status", "offer_price_rcept", "band_low", "band_high",
-                 "offer_price_note"]
+                 "offer_price_final", "offer_price_status", "offer_price_crosscheck", "offer_price_rcept",
+                 "band_low", "band_high", "offer_price_note"]
 TERMS_COLS = ["ipo_id", "rcept_no", "rcept_dt", "kind", "available_at", "offer_price", "offer_price_status",
               "offer_price_expected", "stock_cnt", "old_share_cnt", "offer_amount", "sub_start", "sub_end",
               "pay_date", "sale_method"]
@@ -53,11 +53,14 @@ def listed_within_window(first_rcept_dt: str, list_dd: str | None) -> bool:
 
 def krx_listing_dates(base_date: str) -> dict:
     """corp_code → (stock_code, LIST_DD). KRX 종목기본정보가 없으면 빈 dict."""
+    # 못 받거나 비어 있으면 매매 대상이 조용히 0건이 되므로 경고로 넘기지 않고 실패시킨다.
     try:
-        base = {x["ISU_SRT_CD"]: x["LIST_DD"] for x in krx_api.fetch("ksq_base", base_date)}
-    except Exception as e:  # 키·승인 문제로 못 받으면 상장일 없이 진행하고 건강판에서 드러나게 한다
-        print(f"[경고] KRX 종목기본정보를 받지 못함({type(e).__name__}) — list_dd 비움")
-        return {}
+        rows = krx_api.fetch("ksq_base", base_date)
+    except Exception as e:
+        raise RuntimeError(f"KRX ksq_base({base_date}) 종목기본정보를 받지 못함: {type(e).__name__}: {e}") from e
+    if not rows:
+        raise RuntimeError(f"KRX ksq_base({base_date}) 응답이 비어 있음 — 기준일이 휴장일이거나 서비스 미승인일 수 있다")
+    base = {x["ISU_SRT_CD"]: x["LIST_DD"] for x in rows}
     by_corp = {}
     for stock, corp in dart_api.corp_code_map().items():
         if stock in base:
@@ -71,6 +74,7 @@ def build(start: str, end: str, base_date: str):
     for r in regs:
         by_corp[r["corp_code"]].append(r)
     listing = krx_listing_dates(base_date)
+    result_reports = dart_list.result_reports(start, end)
 
     registry, terms = [], []
     for corp, filings in by_corp.items():
@@ -82,10 +86,13 @@ def build(start: str, end: str, base_date: str):
         universe = listed_within_window(first["rcept_dt"], list_dd)
 
         final = {"offer_price": None, "status": Status.UNVERIFIED.value, "rcept_no": "", "band_low": None,
-                 "band_high": None, "note": "발행조건확정 공시 없음"}
+                 "band_high": None, "note": "발행조건확정 공시 없음", "crosscheck": "미실시"}
         confirmed = [f["rcept_no"] for f in filings if f["kind"] == "발행조건확정"]
         if universe and confirmed:  # 원문 내려받기는 매매 대상 후보에만 한다
             final = dart_terms.final_offer_terms(confirmed)
+            final_dt = next(f["rcept_dt"] for f in filings if f["rcept_no"] == final["rcept_no"])
+            report = dart_list.pick_result_report(result_reports.get(corp, []), final_dt)
+            final = dart_terms.reconcile(final, dart_terms.result_report_terms(report["rcept_no"]) if report else None)
         elif confirmed:
             final["note"] = "매매 대상 아님: 원문 미조회"
 
@@ -95,6 +102,7 @@ def build(start: str, end: str, base_date: str):
             "is_ipo_candidate": sale_method == "일반공모", "list_dd": list_dd, "in_trading_universe": universe,
             "n_filings": len(filings), "last_kind": filings[-1]["kind"],
             "offer_price_final": final["offer_price"], "offer_price_status": final["status"],
+            "offer_price_crosscheck": final.get("crosscheck", "미실시"),
             "offer_price_rcept": final.get("rcept_no", ""), "band_low": final.get("band_low"),
             "band_high": final.get("band_high"), "offer_price_note": final.get("note", ""),
         })

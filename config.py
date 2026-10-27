@@ -31,7 +31,11 @@ BUFFER_START = "20230101"   # 탐지용 여유 구간. 이 기간에 이미 거�
 EXCLUDE_NAME_KEYWORDS = ["스팩", "SPAC", "리츠"]
 
 # ── 비용 가정 (results/README: 반드시 명시) ──
-COMMISSION_PER_SIDE = 0.00015      # 0.015% (키움 비대면 기준, 본인 계좌 수수료로 바꿀 것)
-SLIPPAGE_PER_SIDE = 0.0025         # 0.25% → 왕복 0.5%p (설계 v2 가정)
-# 코스닥 증권거래세 (매도 시). 연도별로 다르다. 적용 전 국세청·증권사 공지로 한 번 더 확인.
-KOSDAQ_SELL_TAX = {2023: 0.0020, 2024: 0.0018, 2025: 0.0015, 2026: 0.0020}
+# 출처는 config/costs_v1.yaml 하나뿐이다 (사람이 고정, 바꾸려면 새 버전 파일). 여기서는 읽어 올 뿐 따로 두지 않는다.
+# 수수료는 본인 계좌 기준으로, 매도세는 적용 전 국세청·증권사 공지로 한 번 더 확인할 것.
+from core import settings as _settings  # noqa: E402
+
+_COSTS = _settings.load_costs(2023, 2026)
+COMMISSION_PER_SIDE = _COSTS["commission_per_side"]
+SLIPPAGE_PER_SIDE = _COSTS["slippage_per_side"]
+KOSDAQ_SELL_TAX = dict(_COSTS["kosdaq_sell_tax"])

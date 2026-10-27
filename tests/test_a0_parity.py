@@ -70,6 +70,26 @@ def test_settles_without_index_bars_using_the_stock_calendar(world):
         assert s.bench_ret is None                                               # 기준선은 계산 불가
 
 
+def test_bar_index_is_built_once_per_backtest_not_once_per_ipo(world, monkeypatch):
+    from evaluate import outcomes
+    eligible, facts, bars, costs = world
+    built = []
+    orig = outcomes.BarIndex.__init__
+    monkeypatch.setattr(outcomes.BarIndex, "__init__", lambda self, b: (built.append(1), orig(self, b))[1])
+    run_a0([r["code"] for r in eligible], facts, bars, costs)
+    assert len(built) == 1
+
+
+def test_settle_with_a_prebuilt_index_matches_settle_with_raw_bars(world):
+    from decide.runner import run_decision_point as rdp
+    from evaluate.outcomes import BarIndex, settle
+    eligible, facts, bars, costs = world
+    r = eligible[0]
+    d0 = datetime.strptime(r["list_date"], "%Y%m%d").replace(hour=15, minute=20, tzinfo=KST)
+    (d,) = rdp(d0, [r["code"]], facts, bars)
+    assert settle(d, BarIndex(bars), costs) == settle(d, bars, costs)
+
+
 def test_summary_mean_matches_report(world):
     eligible, facts, bars, costs = world
     new = report.summarize([s.net_ret for _, s in run_a0([r["code"] for r in eligible], facts, bars, costs)])

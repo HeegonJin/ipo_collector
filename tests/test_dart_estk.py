@@ -2,10 +2,14 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dart_estk  # noqa: E402
 
 FIXTURE = Path(__file__).parent / "fixtures_real" / "estk_kmf_20261027.json"
+# 실제 응답 발췌는 로컬 전용(.gitignore)이라 새로 클론하면 없다 → 실패가 아니라 건너뛴다
+needs_fixture = pytest.mark.skipif(not FIXTURE.exists(), reason="tests/fixtures_real 은 로컬 전용(저장소에 없음)")
 
 
 def test_parse_num_keeps_missing_as_none_not_zero():
@@ -22,6 +26,7 @@ def test_parse_dates_korean_range():
     assert dart_estk.parse_dates("-") == []
 
 
+@needs_fixture
 def test_estk_cache_refetches_only_when_newer_filing_appears(tmp_path, monkeypatch):
     import config
     monkeypatch.setattr(config, "RAW", tmp_path)
@@ -37,6 +42,7 @@ def test_estk_cache_refetches_only_when_newer_filing_appears(tmp_path, monkeypat
     assert len(calls) == 2 and calls[1] == ("20261027", "20261027")
 
 
+@needs_fixture
 def test_normalize_real_response():
     resp = json.loads(FIXTURE.read_text(encoding="utf-8"))
     (rec,) = dart_estk.normalize(resp)

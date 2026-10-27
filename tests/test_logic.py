@@ -51,7 +51,9 @@ def setup(tmp):
             p.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
 
 
-def test_pipeline():
+def test_pipeline(monkeypatch):
+    for name in ("RAW", "MART", "META", "ROOT", "BUFFER_START", "SAMPLE_START"):  # setup() 이 바꾸는 전역값을 테스트 뒤 되돌린다
+        monkeypatch.setattr(config, name, getattr(config, name))
     tmp = Path(tempfile.mkdtemp())
     setup(tmp)
     rows = build_sample.build("20230106", tag="t")
@@ -67,8 +69,9 @@ def test_pipeline():
     assert a["offer_price_est"] == 10000         # 공모가 = 종가 − 전일대비
     assert abs(a["d0_close_vs_offer"] - (-0.32)) < 1e-9
     assert abs(a["gross_ret"] - (7700 / 6800 - 1)) < 1e-9
-    buy = 6800 * (1 + 0.00015 + 0.0025)
-    sell = 7700 * (1 - 0.00015 - 0.0025 - 0.0020)
+    fee, slip, tax = config.COMMISSION_PER_SIDE, config.SLIPPAGE_PER_SIDE, config.KOSDAQ_SELL_TAX[2023]
+    buy = 6800 * (1 + fee + slip)
+    sell = 7700 * (1 - fee - slip - tax)
     assert abs(a["net_ret"] - (sell / buy - 1)) < 1e-9
     assert a["net_ret"] < a["gross_ret"]
     assert abs(a["kosdaq_overnight"] - (707 / 700 - 1)) < 1e-9
@@ -88,4 +91,5 @@ def test_pipeline():
 
 
 if __name__ == "__main__":
-    test_pipeline(); print("OK")
+    import pytest
+    raise SystemExit(pytest.main([__file__, "-q"]))

@@ -13,11 +13,10 @@ import re
 import time
 from datetime import date, datetime
 
-import requests
-
 import config
+from core import http
 
-API = "https://opendart.fss.or.kr/api"
+API ="https://opendart.fss.or.kr/api"
 EQUITY_KEYWORD = "증권신고서(지분증권)"
 _PREFIX = re.compile(r"^\[([^\]]+)\]")
 KIND_BY_PREFIX = {"기재정정": "기재정정", "첨부정정": "첨부정정", "발행조건확정": "발행조건확정"}
@@ -42,10 +41,9 @@ def is_spac(row: dict) -> bool:
 def _fetch_range(bgn: str, end: str) -> list[dict]:
     rows, page = [], 1
     while True:
-        r = requests.get(f"{API}/list.json", timeout=30, params={
+        r = http.safe_get(f"{API}/list.json", params={
             "crtfc_key": config.DART_API_KEY, "bgn_de": bgn, "end_de": end,
             "pblntf_ty": "C", "page_count": 100, "page_no": page})
-        r.raise_for_status()
         j = r.json()
         if j.get("status") == "013":  # 조회된 데이터 없음
             return rows
@@ -73,9 +71,11 @@ def month_ranges(start: str, end: str):
 def filings_for_month(yyyymm: str, bgn: str, end: str, today: date | None = None) -> list[dict]:
     today = today or date.today()
     path = config.RAW / "dart" / "list" / f"{yyyymm}.json"
-    finished = datetime.strptime(end, "%Y%m%d").date() < today.replace(day=1)
-    full_month = bgn.endswith("01")
-    cacheable = finished and full_month
+    end_d = datetime.strptime(end, "%Y%m%d").date()
+    next_month = date(end_d.year + (end_d.month == 12), end_d.month % 12 + 1, 1)
+    last_day = date.fromordinal(next_month.toordinal() - 1)
+    # 끝난 달이고 1일~말일 전체를 받았을 때만 캐시한다 (중순까지만 받은 부분 달이 완성본으로 굳으면 공시가 조용히 빠진다)
+    cacheable = end_d < today.replace(day=1) and bgn.endswith("01") and end_d == last_day
     if path.exists() and cacheable:
         return json.loads(path.read_text(encoding="utf-8"))
     rows = _fetch_range(bgn, end)
@@ -96,6 +96,27 @@ def equity_registrations(start: str, end: str) -> list[dict]:
             out.append({**r, "kind": report_kind(r["report_nm"])})
     out.sort(key=lambda r: (r["rcept_dt"], r["rcept_no"]))
     return out
+
+
+RESULT_KEYWORD = "증권발행실적보고서"
+
+
+def result_reports(start: str, end: str) -> dict:
+    """기간 내 증권발행실적보고서를 회사코드별로 접수일 순으로 묶는다. rcept_no 중복은 한 번만."""
+    seen, out = set(), {}
+    for yyyymm, bgn, last in month_ranges(start, end):
+        for r in filings_for_month(yyyymm, bgn, last):
+            if RESULT_KEYWORD in r.get("report_nm", "") and r["rcept_no"] not in seen:
+                seen.add(r["rcept_no"])
+                out.setdefault(r["corp_code"], []).append(r)
+    for rows in out.values():
+        rows.sort(key=lambda r: (r["rcept_dt"], r["rcept_no"]))
+    return out
+
+
+def pick_result_report(reports: list[dict], after_dt: str):
+    """확정 공시 접수일(after_dt) 이후 가장 먼저 접수된 실적보고서. 없으면 None."""
+    return next((r for r in reports if r["rcept_dt"] >= after_dt), None)
 
 
 if __name__ == "__main__":
