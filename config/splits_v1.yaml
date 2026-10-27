@@ -1,0 +1,5 @@
+# 구간 분할 v1. 기준값 탐색 전에 고정한다. 검증 구간은 한 번만 연다.
+version: splits_v1
+train:   {start: "2023-07-01", end: "2025-06-30"}
+valid:   {start: "2025-07-01", end: "2026-10-31"}   # 1회만 열기 (_meta/validation_runs.csv 에 기록)
+forward: {start: "2026-11-16", end: null}           # 모의 운영 시작일부터
