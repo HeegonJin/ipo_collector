@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta
 import requests
 
 import config
-from core import http
+from core import http, ids
 
 BASE ="https://data-dbg.krx.co.kr/svc/apis"  # VERIFY
 SERVICES = {
@@ -32,6 +32,9 @@ RECENT_EMPTY_DAYS = 4    # 이 기간 안의 날짜가 빈 응답이면 캐시�
 
 
 def _cache_path(service: str, bas_dd: str):
+    if service not in SERVICES:
+        raise ValueError(f"알 수 없는 서비스: {service!r}")
+    bas_dd = ids.safe_date(bas_dd)   # 캐시 파일 경로에 쓰기 전에 형식 검증
     p = config.RAW / "krx" / service / f"{bas_dd}.json"
     p.parent.mkdir(parents=True, exist_ok=True)
     return p

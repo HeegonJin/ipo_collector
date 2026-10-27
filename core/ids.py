@@ -5,6 +5,32 @@ _CORP_CODE = re.compile(r"^\d{8}$")
 _RCEPT_NO = re.compile(r"^\d{14}$")
 
 
+def _ascii_digits(value: str, n: int, label: str) -> str:
+    """str.isdigit() 는 전각 숫자도 통과시키므로 ASCII 만 허용하고 길이를 고정한다 (경로에 쓰기 전 검증)."""
+    if not (isinstance(value, str) and len(value) == n and value.isascii() and value.isdigit()):
+        raise ValueError(f"{label} 는 ASCII 숫자 {n}자리여야 함: {value!r}")
+    return value
+
+
+def safe_rcept_no(value: str) -> str:
+    return _ascii_digits(value, 14, "rcept_no")
+
+
+def safe_corp_code(value: str) -> str:
+    return _ascii_digits(value, 8, "corp_code")
+
+
+def safe_date(value: str) -> str:
+    """YYYYMMDD. 실제 달력에 있는 날짜만 허용한다."""
+    from datetime import datetime
+    _ascii_digits(value, 8, "날짜")
+    try:
+        datetime.strptime(value, "%Y%m%d")
+    except ValueError:
+        raise ValueError(f"날짜 형식(YYYYMMDD)이 아님: {value!r}") from None
+    return value
+
+
 def short_code(code: str) -> str:
     """6자리 단축코드 또는 12자 ISIN(KR7......) 입력을 6자리 단축코드로."""
     code = (code or "").strip()

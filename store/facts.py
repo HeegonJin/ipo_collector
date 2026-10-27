@@ -25,9 +25,11 @@ def facts_from_registry(registry_csv: Path, terms_csv: Path) -> list[Fact]:
     out = []
     for r in _read(registry_csv):
         final = r["offer_price_rcept"]
-        if r["in_trading_universe"] != "True" or not final or final not in rcept_dt:
+        # 실적보고서를 단독 채택한 경우 그 접수번호는 신고서 목록에 없으므로 레지스트리가 적어 둔 날짜를 우선한다
+        dt = r.get("offer_price_available_dt") or rcept_dt.get(final)
+        if r["in_trading_universe"] != "True" or not final or not dt:
             continue
-        at = dart_available_at(rcept_dt[final])
+        at = dart_available_at(dt)
         common = dict(ipo_id=r["ipo_id"], available_at=at, information_phase=Phase.PRE_LISTING)
         confirmed = r["offer_price_status"] == Status.CONFIRMED.value and r["offer_price_final"] != ""
         out.append(Fact(var="offer_price", unit="KRW", source_type=SourceType.DART, source_id=final,

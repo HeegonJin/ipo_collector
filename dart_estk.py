@@ -12,7 +12,7 @@ import re
 import time
 
 import config
-from core import http
+from core import http, ids
 
 API ="https://opendart.fss.or.kr/api"
 _DATE = re.compile(r"(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일")
@@ -83,6 +83,7 @@ def estk_for_corp(corp_code: str, filings: list[dict]) -> list[dict]:
 
     estkRs 는 '최초 신고일이 들어 있는 기간'으로만 응답하고 회사당 최신 정정본 한 건만 준다 (2026-10-27 실측).
     캐시는 받을 때의 최신 접수번호를 함께 저장해 두고, 그보다 새 공시가 생겼을 때만 다시 받는다."""
+    corp_code = ids.safe_corp_code(corp_code)   # 캐시 파일 경로에 쓰기 전에 형식 검증
     first_dt = min(f["rcept_dt"] for f in filings)
     newest = max(f["rcept_no"] for f in filings)
     path = config.RAW / "dart" / "estk" / f"{corp_code}.json"

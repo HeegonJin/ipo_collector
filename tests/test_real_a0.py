@@ -59,6 +59,24 @@ def test_run_settles_registry_ipos_with_yaml_costs(world):
     assert out["summary"]["n"] == 2
 
 
+def test_unknown_limit_up_is_reported_separately_not_counted_as_fillable(world):
+    """공모가를 몰라 상한가 여부를 판정할 수 없는 건은 주 결과(상한가 제외)에 넣지 않고 따로 보고한다."""
+    unknown = reg("U_ipo", "SP", "20230105", price="")
+    unknown["offer_price_status"] = "미확인"
+    b.write([reg("A_ipo", "A", "20230105"), reg("LU_ipo", "LU", "20230105"), unknown], b.REGISTRY_COLS,
+            "dart_ipo_registry.csv")
+    b.write([{"ipo_id": i, "rcept_no": "R1", "rcept_dt": "20230103", "kind": "발행조건확정",
+              "available_at": b.available_at("20230103")} for i in ("A_ipo", "LU_ipo", "U_ipo")],
+            b.TERMS_COLS, "dart_offer_terms.csv")
+    out = real_a0.run("20230106")
+    by = {r["ipo_id"]: r for r in out["rows"]}
+    assert by["U_ipo"]["buy_at_limit_up"] is None
+    assert out["summary"]["n"] == 3                       # 전부 체결 가정
+    assert out["summary_ex_limit_up"]["n"] == 1           # 상한가가 아님이 확인된 건(A)만
+    assert out["summary_unknown"]["n"] == 1               # 불명은 따로
+    assert "상한가 불명" in Path(out["doc"]).read_text(encoding="utf-8")
+
+
 def test_run_writes_result_csv_and_doc(world):
     out = real_a0.run("20230106")
     assert Path(out["csv"]).exists() and Path(out["doc"]).exists()

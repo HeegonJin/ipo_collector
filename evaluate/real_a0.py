@@ -3,7 +3,8 @@
   python -m evaluate.real_a0 20261026
 
 공모가 주 출처는 DART 확정 공모가다 (KRX 역산값은 진코스텍처럼 틀릴 수 있다).
-상한가 종가(공모가 ×4 근처)는 체결이 불확실하므로 '전부 체결' 값과 '상한가 제외(미체결)' 값을 같이 낸다.
+상한가 종가(공모가 ×4)는 체결이 불확실하다. 주 결과는 '상한가가 아님이 확인된 건'만 쓰고,
+공모가를 몰라 판정할 수 없는 건은 따로 보고하며, '전부 체결' 값은 민감도로 함께 낸다.
 코스닥 지수가 승인 전이면 기준선은 계산 불가로 표시한다.
 """
 import csv
@@ -29,95 +30,113 @@ def _rows(results):
              **{k: v for k, v in asdict(s).items() if k in ROW_COLS}} for d, s in results]
 
 
-def _pct(x):
-    return report.pct(x)
-
-
 def _line(name, s):
     if not s:
         return f"| {name} | 0 | - | - | - | - | - | - |"
-    return (f"| {name} | {s['n']} | {_pct(s['mean'])} | {_pct(s['median'])} | {s['win_rate'] * 100:.1f}% | "
-            f"{_pct(s['avg_win'])} / {_pct(s['avg_loss'])} | {_pct(s['p10'])} | {_pct(s['worst'])} |")
+    p = report.pct
+    return (f"| {name} | {s['n']} | {p(s['mean'])} | {p(s['median'])} | {s['win_rate'] * 100:.1f}% | "
+            f"{p(s['avg_win'])} / {p(s['avg_loss'])} | {p(s['p10'])} | {p(s['worst'])} |")
 
 
-def run(end: str, start: str | None = None) -> dict:
-    start = start or config.BUFFER_START
+def _load(start, end):
     mart = config.MART
     facts = facts_from_registry(mart / "dart_ipo_registry.csv", mart / "dart_offer_terms.csv")
     ipo_ids = sorted({f.ipo_id for f in facts if f.var == "listing_date"})
     codes = {f.value_text for f in facts if f.var == "short_code"}
     bars = BarIndex(list(iter_filtered_bars(start, end, codes)) + calendar_bars(start, end))  # 민감도 실행까지 한 번만
-    years = sorted({int(f.value_text[:4]) for f in facts if f.var == "listing_date"})
-    costs = settings.load_costs(years[0], years[-1]) if years else settings.load_costs(2023, 2023)
+    years = sorted({int(f.value_text[:4]) for f in facts if f.var == "listing_date"}) or [2023]
+    return facts, ipo_ids, bars, settings.load_costs(years[0], years[-1])
 
-    results = run_a0(ipo_ids, facts, bars, costs)
-    rows = _rows(results)
+
+def _summaries(rows):
     usable = [r for r in rows if r["net_ret"] is not None]
-    ex_limit = [r for r in usable if r["buy_at_limit_up"] is not True]
-    summary = report.summarize([r["net_ret"] for r in usable])
-    summary_ex = report.summarize([r["net_ret"] for r in ex_limit])
-    gross = report.summarize([r["gross_ret"] for r in usable])
-    bench = report.summarize([r["bench_ret"] for r in usable])
+    known_not_limit = [r for r in usable if r["buy_at_limit_up"] is False]
+    unknown = [r for r in usable if r["buy_at_limit_up"] is None]
+    net = lambda rs: report.summarize([r["net_ret"] for r in rs])  # noqa: E731
+    return {
+        "usable": usable, "n_limit": sum(1 for r in usable if r["buy_at_limit_up"] is True), "n_unknown": len(unknown),
+        "summary": net(usable), "summary_ex_limit_up": net(known_not_limit), "summary_unknown": net(unknown),
+        "gross": report.summarize([r["gross_ret"] for r in usable]),
+        "bench": report.summarize([r["bench_ret"] for r in usable]),
+    }
 
-    sensitivity = {}
+
+def _sensitivity(ipo_ids, facts, bars, costs):
+    out = {}
     for slip in costs.get("slippage_sensitivity", []):
         alt = run_a0(ipo_ids, facts, bars, {**costs, "slippage_per_side": slip})
-        vals = [s.net_ret for _, s in alt if s.net_ret is not None and s.buy_at_limit_up is not True]
-        sensitivity[slip] = st.mean(vals) if vals else None
+        vals = [s.net_ret for _, s in alt if s.net_ret is not None and s.buy_at_limit_up is False]
+        out[slip] = st.mean(vals) if vals else None
+    return out
 
-    mart.mkdir(parents=True, exist_ok=True)
-    out_csv = mart / f"a0_real_{start}_{end}.csv"
-    with open(out_csv, "w", encoding="utf-8-sig", newline="") as f:
+
+def _write_csv(rows, start, end):
+    config.MART.mkdir(parents=True, exist_ok=True)
+    path = config.MART / f"a0_real_{start}_{end}.csv"
+    with open(path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=ROW_COLS)
         w.writeheader()
         for r in rows:
             w.writerow({k: ("" if r[k] is None else r[k]) for k in ROW_COLS})
+    return path
 
+
+def _render_doc(rows, sm, sensitivity, costs):
     dates = sorted(r["list_date"] for r in rows if r["list_date"])
-    n_unknown_limit = sum(1 for r in usable if r["buy_at_limit_up"] is None)
-    n_limit = sum(1 for r in usable if r["buy_at_limit_up"] is True)
+    bench = sm["bench"]
     bench_text = ("계산 불가 — 코스닥 지수 서비스(kosdaq_dd_trd) 미승인으로 수집하지 못함" if not bench
-                  else f"평균 {_pct(bench['mean'])} (n={bench['n']})")
-    md = f"""# A0 기준선 결과 (실데이터) — 상장일 종가 매수 → 다음 거래일 시가 매도
+                  else f"평균 {report.pct(bench['mean'])} (n={bench['n']})")
+    sens = "\n".join(f"- 편도 {k * 100:.2f}%: {report.pct(v)}" for k, v in sensitivity.items()) or "- 설정 없음"
+    return f"""# A0 기준선 결과 (실데이터) — 상장일 종가 매수 → 다음 거래일 시가 매도
 
 작성 {date.today()} · 자동 생성 초안 · 근거 D5, D7, D11, D12
 
 ## 데이터
 - 대상: 코스닥 신규상장 중 DART 지분증권 신고서가 있고 KRX 종목기본정보에 상장일이 있는 종목 (레지스트리 `in_trading_universe`)
-- 기간: {dates[0] if dates else '-'} ~ {dates[-1] if dates else '-'} · 대상 {len(rows)}건 · 계산 가능 {len(usable)}건 · 계산 불가 {len(rows) - len(usable)}건
+- 기간: {dates[0] if dates else '-'} ~ {dates[-1] if dates else '-'} · 대상 {len(rows)}건 · 계산 가능 {len(sm['usable'])}건 · 계산 불가 {len(rows) - len(sm['usable'])}건
 - 출처: KRX Open API 코스닥 일별매매정보 (원본 `data/0_raw/krx`), DART 발행조건확정 공시 원문 (확정 공모가)
 - 학습/검증 분리: 이 결과는 기준값이 없는 기준선이라 분리하지 않음
 
 ## 비용·체결 가정
 - 수수료 편도 {costs['commission_per_side'] * 100:.3f}% · 슬리피지 편도 {costs['slippage_per_side'] * 100:.2f}% · 매도 거래세 연도별 {costs['kosdaq_sell_tax']}
 - 하룻밤 갭은 시가 체결로 그대로 반영 (D5)
-- 상한가 종가(공모가 ×4 근처) {n_limit}건은 종가 매수 체결이 불확실. 공모가를 몰라 판정할 수 없는 건 {n_unknown_limit}건
-- 주 결과는 상한가 종가를 미체결로 보고 제외한 값, 전부 체결 가정은 민감도
+- 상한가 종가(공모가 ×4) {sm['n_limit']}건은 종가 매수 체결이 불확실 → 주 결과에서 제외. 공모가를 몰라 상한가 불명인 건 {sm['n_unknown']}건은 따로 표시
+- 주 결과는 상한가가 아님이 확인된 건만, 전부 체결 가정은 민감도
 
 ## 성과
 | 구분 | 건수 | 평균(기대값) | 중앙값 | 승률 | 평균 수익 / 평균 손실 | 하위 10% | 최대 손실 |
 |---|---|---|---|---|---|---|---|
-{_line('비용 차감 후 · 상한가 제외(미체결, 주 결과)', summary_ex)}
-{_line('비용 차감 후 · 전부 체결 가정', summary)}
-{_line('비용 차감 전 · 전부 체결 가정', gross)}
+{_line('비용 차감 후 · 상한가 아님 확인(주 결과)', sm['summary_ex_limit_up'])}
+{_line('비용 차감 후 · 상한가 불명(공모가 미확인)', sm['summary_unknown'])}
+{_line('비용 차감 후 · 전부 체결 가정', sm['summary'])}
+{_line('비용 차감 전 · 전부 체결 가정', sm['gross'])}
 
 ## 코스닥 기준선
 - {bench_text}
 
-## 슬리피지 민감도 (상한가 제외 평균, 비용 차감 후)
-{chr(10).join(f'- 편도 {k * 100:.2f}%: {_pct(v)}' for k, v in sensitivity.items()) or '- 설정 없음'}
+## 슬리피지 민감도 (상한가 아님 확인 건 평균, 비용 차감 후)
+{sens}
 
 ## 한계
 - 공모가는 DART 확정 공모가 우선. KRX 역산값은 일부 종목에서 다르다(진코스텍 23,850 vs 23,500).
 - 상장일·종목코드는 KRX 종목기본정보(현재 상장 종목 스냅샷)에서 와서 상장폐지된 종목이 빠진다 (생존자 편향).
 - 이 결과는 필터가 없는 기준선이다. 표본이 작거나 한두 종목에 좌우되면 중앙값·하위 10%를 같이 볼 것.
 """
+
+
+def run(end: str, start: str | None = None) -> dict:
+    start = start or config.BUFFER_START
+    facts, ipo_ids, bars, costs = _load(start, end)
+    rows = _rows(run_a0(ipo_ids, facts, bars, costs))
+    sm = _summaries(rows)
+    sensitivity = _sensitivity(ipo_ids, facts, bars, costs)
+    out_csv = _write_csv(rows, start, end)
     out_dir = config.ROOT / "results"
     out_dir.mkdir(exist_ok=True)
     doc = out_dir / f"{date.today()}_A0_real_v1.md"
-    doc.write_text(md, encoding="utf-8")
-    return {"rows": rows, "summary": summary, "summary_ex_limit_up": summary_ex, "sensitivity": sensitivity,
-            "csv": str(out_csv), "doc": str(doc)}
+    doc.write_text(_render_doc(rows, sm, sensitivity, costs), encoding="utf-8")
+    return {"rows": rows, "summary": sm["summary"], "summary_ex_limit_up": sm["summary_ex_limit_up"],
+            "summary_unknown": sm["summary_unknown"], "sensitivity": sensitivity, "csv": str(out_csv), "doc": str(doc)}
 
 
 if __name__ == "__main__":

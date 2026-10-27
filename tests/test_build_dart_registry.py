@@ -12,7 +12,8 @@ def reg(corp, no, dt, kind, name="가나다"):
             "report_nm": "x", "stock_code": ""}
 
 
-def patch(monkeypatch, regs, listing, fetched, result_reports=None, result_price=None):
+def patch(monkeypatch, regs, listing, fetched, result_reports=None, result_price=None,
+          sale_method="일반공모", final_price=18500.0):
     monkeypatch.setattr(b.dart_list, "equity_registrations", lambda s, e: regs)
     monkeypatch.setattr(b.dart_list, "result_reports", lambda s, e: result_reports or {})
     monkeypatch.setattr(b.dart_terms, "result_report_terms", lambda rcept: {
@@ -26,8 +27,9 @@ def patch(monkeypatch, regs, listing, fetched, result_reports=None, result_price
 
     def fake_final(rcepts):
         fetched.append(list(rcepts))
-        return {"offer_price": 18500.0, "status": "확인", "rcept_no": sorted(rcepts)[-1], "band_low": 17000.0,
-                "band_high": 18500.0, "note": ""}
+        return {"offer_price": final_price, "status": "확인" if final_price else "미확인", "rcept_no": sorted(rcepts)[-1],
+                "band_low": 17000.0, "band_high": 18500.0, "note": "" if final_price else "공모개요 표 없음",
+                "sale_method": sale_method}
 
     monkeypatch.setattr(b.dart_terms, "final_offer_terms", fake_final)
 
@@ -102,6 +104,68 @@ def test_krx_snapshot_maps_corp_to_stock_and_listing_date(monkeypatch):
     monkeypatch.setattr(b.krx_api, "fetch", lambda service, d: [{"ISU_SRT_CD": "195990", "LIST_DD": "20261023"}])
     monkeypatch.setattr(b.dart_api, "corp_code_map", lambda: {"195990": "00534729", "000000": "00000009"})
     assert b.krx_listing_dates("20261023") == {"00534729": ("195990", "20261023")}
+
+
+def test_confirming_filings_after_listing_are_other_offerings_and_are_ignored(monkeypatch):
+    """상장 뒤의 발행조건확정 공시는 유상증자 등 다른 공모다 (이노스페이스·센서뷰 사례) — IPO 확정가 후보에서 뺀다."""
+    fetched = []
+    regs = REGS + [reg("00000001", "20270115000900", "20270115", "발행조건확정")]
+    patch(monkeypatch, regs, {"00000001": ("123456", "20261023")}, fetched)
+    (r,), terms = b.build("20260101", "20270201", "20261023")
+    assert fetched == [["20261012000308"]]
+    assert r["offer_price_rcept"] == "20261012000308"
+
+
+def test_non_public_offering_method_is_not_trusted_as_an_ipo_price(monkeypatch):
+    patch(monkeypatch, REGS, {"00000001": ("123456", "20261023")}, [], sale_method="주주배정")
+    (r,), _ = b.build("20260101", "20261027", "20261023")
+    assert r["offer_price_status"] == "미확인" and "일반공모" in r["offer_price_note"]
+
+
+def test_result_report_price_is_adopted_when_the_confirming_filing_has_no_readable_price(monkeypatch):
+    patch(monkeypatch, REGS, {"00000001": ("123456", "20261023")}, [], RR, result_price=18500.0, final_price=None)
+    (r,), _ = b.build("20260101", "20261027", "20261023")
+    assert r["offer_price_final"] == 18500.0 and r["offer_price_status"] == "확인"
+    assert r["offer_price_crosscheck"] == "실적보고서 단독"
+    assert r["offer_price_rcept"] == "20261014000500" and r["offer_price_available_dt"] == "20261014"
+
+
+def test_available_date_of_a_normal_price_is_the_confirming_filing_date(monkeypatch):
+    patch(monkeypatch, REGS, {"00000001": ("123456", "20261023")}, [])
+    (r,), _ = b.build("20260101", "20261027", "20261023")
+    assert r["offer_price_available_dt"] == "20261012"
+
+
+def test_universe_excludes_listings_before_the_sample_start_and_konex_transfers():
+    # 첫 인자는 '상장 직전 마지막 지분증권 신고일' (없으면 None)
+    assert b.universe_decision("20261012", "20261023", "20230701", None) == (True, "")
+    assert b.universe_decision("20230109", "20230119", "20230701", None) == (False, "표본 시작일 이전 상장")
+    assert b.universe_decision("20241011", "20241025", "20230701", "코넥스 이전상장") == (False, "코넥스 이전상장")
+    assert b.universe_decision("20261012", "", "20230701", None) == (False, "KRX 상장일 없음")
+    assert b.universe_decision(None, "20250101", "20230701", None)[0] is False       # 상장 전 신고 없음: 합병·이전상장
+    assert b.universe_decision("20240101", "20260101", "20230701", None)[0] is False  # 마지막 신고도 400일 초과
+
+
+def test_refiled_ipo_is_in_the_universe_even_if_the_first_filing_was_withdrawn_long_before(monkeypatch):
+    """알지노믹스: 최초 신고 2024-08(철회), 재신고 뒤 2025-12 상장 — 최초 신고일 기준 400일 창이면 놓친다."""
+    regs = [reg("00000007", "20240829000100", "20240829", "최초"),
+            reg("00000007", "20251205000200", "20251205", "발행조건확정")]
+    patch(monkeypatch, regs, {"00000007": ("476830", "20251218")}, [])
+    (r,), _ = b.build("20230101", "20261027", "20261023")
+    assert r["in_trading_universe"] is True and r["ipo_id"] == "00000007_20240829000100"
+
+
+def test_filings_only_after_listing_mean_an_existing_company_not_an_ipo(monkeypatch):
+    regs = [reg("00000008", "20260109000100", "20260109", "최초"), reg("00000008", "20260209000200", "20260209", "발행조건확정")]
+    patch(monkeypatch, regs, {"00000008": ("199550", "20240201")}, [])
+    (r,), _ = b.build("20230101", "20261027", "20261023")
+    assert r["in_trading_universe"] is False
+
+
+def test_build_applies_the_exclusions_to_the_registry(monkeypatch):
+    patch(monkeypatch, REGS, {"00000001": ("123456", "20261023")}, [])
+    (r,), _ = b.build("20260101", "20261027", "20261023", exclude={"123456": "코넥스 이전상장"})
+    assert r["in_trading_universe"] is False and r["universe_note"] == "코넥스 이전상장"
 
 
 def test_listing_window():

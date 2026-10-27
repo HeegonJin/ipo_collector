@@ -47,5 +47,16 @@ def test_load_list_dd_maps_codes_and_fails_loudly_when_empty(monkeypatch):
         build_sample.load_list_dd("20261023")
 
 
+def test_excluded_listings_returns_code_to_reason_for_spac_and_konex_transfers(monkeypatch, tmp_path):
+    """빌더가 DART 쪽 매매 대상에서 코넥스 이전상장 등을 빼려면 KRX 일별 데이터로 찾은 제외 목록이 필요하다."""
+    import config
+    import test_logic
+    for name in ("RAW", "MART", "META", "ROOT", "BUFFER_START", "SAMPLE_START"):
+        monkeypatch.setattr(config, name, getattr(config, name))
+    test_logic.setup(tmp_path)
+    got = build_sample.excluded_listings("20230106", "20230105")
+    assert got == {"SP": "스팩·리츠", "KNX1": "코넥스 이전상장"}      # 정상 신규상장 A, 상한가 LU 는 없다
+
+
 def test_new_columns_are_written_to_the_sample_csv():
     assert {"list_dd", "list_dd_check"} <= set(build_sample.COLUMNS)

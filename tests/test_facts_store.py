@@ -48,6 +48,16 @@ def test_confirmed_offer_price_fact_is_available_after_the_confirming_filing(tmp
     assert f.available_at == datetime(2026, 10, 12, 23, 59, 59, tzinfo=KST)
 
 
+def test_price_adopted_from_a_result_report_uses_its_own_available_date(tmp_path, monkeypatch):
+    """실적보고서 단독 채택이면 그 접수번호는 신고서 목록(terms)에 없다 → 레지스트리의 available_dt 로 시점을 정한다."""
+    import config
+    monkeypatch.setattr(config, "MART", tmp_path)
+    rp, tp = write(tmp_path, reg_row(offer_price_rcept="20261014000500", offer_price_available_dt="20261014"), TERMS)
+    f = by_var(facts_from_registry(rp, tp))
+    assert f["offer_price"].available_at == datetime(2026, 10, 14, 23, 59, 59, tzinfo=KST)
+    assert f["listing_date"].available_at == datetime(2026, 10, 14, 23, 59, 59, tzinfo=KST)
+
+
 def test_unverified_price_has_no_value_not_zero(tmp_path, monkeypatch):
     import config
     monkeypatch.setattr(config, "MART", tmp_path)

@@ -56,6 +56,46 @@ def test_missing_table_gives_none_not_zero():
     assert t["offer_price"] is None and t["status"] == "미확인"
 
 
+# 이닉스(2024-01) 발행조건확정 원문 형태: 셀에 단위(주·원)가 붙고 '기명식보통주' 가 붙어 있다
+UNITS = ("(주1) 정정 후 1. 공모개요 (단위 : 원, 주) 증권의종류 증권수량 액면가액 모집(매출)가액 모집(매출)총액 모집(매출)방법 "
+         "기명식보통주 3,000,000주 500 10,000원 30,000,000,000원 일반공모 인수인 증권의종류 인수수량")
+
+# 노브랜드(2024-05): 정정 전 표(예정가)만 있고, 확정 값은 정정사항에 '확정가액' 필드로 적혀 있다
+FIELD_ONLY = ("공통 정정사항 - 모집(매출)가액(예정): 8,700원 ~ 11,000원 - 모집(매출)확정가액: 14,000원 - 모집(매출)확정총액: 16,800,000,000원 "
+              "(주1) 정정 전 1. 공모개요 (단위 : 원, 주) 증권의종류 증권수량 액면가액 모집(매출)가액 모집(매출)총액 모집(매출)방법 "
+              "기명식보통주 1,200,000주 500 8,700원 10,440,000,000원 일반공모 인수인 증권의종류")
+
+
+def test_table_cells_with_units_are_parsed():
+    t = dart_terms.parse_offer_terms(UNITS)
+    assert t["offer_price"] == 10000.0 and t["stock_cnt"] == 3_000_000 and t["status"] == "확인"
+
+
+def test_confirmed_price_field_beats_a_before_correction_table():
+    t = dart_terms.parse_offer_terms(FIELD_ONLY)
+    assert t["offer_price"] == 14000.0 and t["stock_cnt"] == 1_200_000 and t["status"] == "확인"
+
+
+def test_malformed_before_table_with_total_in_the_price_column_is_ignored_when_field_is_present():
+    # 위너스일렉: 정정 전 표의 가액 칸에 총액이 들어가 있다. 확정 필드(8,500원 × 1,700,000주 = 14,450,000,000원)가 맞다.
+    text = ("- 모집(매출) 확정가액: 8,500원 - 모집(매출) 확정총액: 14,450,000,000원 "
+            "(주1) 정정 전 1. 공모개요 증권의 종류 증권수량 액면가액 모집(매출)가액 모집(매출)총액 모집(매출)방법 "
+            "기명식보통주 1,700,000 200 12,750,000,000 12,750,000,000 일반공모 인수인")
+    t = dart_terms.parse_offer_terms(text)
+    assert t["offer_price"] == 8500.0 and t["status"] == "확인"
+
+
+def test_field_and_after_table_that_disagree_are_unverified():
+    t = dart_terms.parse_offer_terms(UNITS.replace("10,000원 30,000,000,000원", "10,000원 30,000,000,000원")
+                                     + " 모집(매출)확정가액: 11,000원 모집(매출)확정총액: 33,000,000,000원")
+    assert t["status"] == "미확인" and "11000" in t["note"].replace(",", "").replace(".0", "")
+
+
+def test_field_without_a_consistent_total_is_not_enough():
+    t = dart_terms.parse_offer_terms("모집(매출)확정가액: 14,000원 모집(매출)확정총액: 16,800,000,001원")
+    assert t["status"] == "미확인"
+
+
 def table(*rows):
     head = ("정정 후 1. 공모개요 (단위 : 원, 주) 증권의 종류 증권 수량 액면가액 모집(매출) 가액 모집(매출) 총액 모집(매출) 방법 ")
     return head + " ".join(rows) + " 인수인 증권의 종류"
@@ -116,9 +156,25 @@ def test_reconcile_without_result_report_keeps_status_and_says_not_checked():
     assert out["status"] == "확인" and out["crosscheck"] == "미실시"
 
 
-def test_reconcile_never_upgrades_an_unverified_price():
+def test_reconcile_upgrades_an_unverified_price_when_the_result_report_agrees():
+    """확정 공시 쪽 값이 문서 내부 검산에 걸려 미확인이어도, 독립 출처인 실적보고서(수량×가액=총액 검산 통과)가
+    같은 값을 주면 확인으로 올린다."""
     out = dart_terms.reconcile(final(23500.0, "미확인"), dart_terms.parse_result_report(RESULT))
-    assert out["status"] == "미확인"
+    assert out["status"] == "확인" and out["crosscheck"] == "일치"
+
+
+def test_reconcile_adopts_the_result_report_price_when_the_confirming_filing_is_unreadable():
+    unreadable = {"offer_price": None, "status": "미확인", "rcept_no": "R1", "note": "공모개요 표 없음"}
+    result = {**dart_terms.parse_result_report(RESULT), "rcept_no": "20261008000730", "rcept_dt": "20261008"}
+    out = dart_terms.reconcile(unreadable, result)
+    assert out["offer_price"] == 23500.0 and out["status"] == "확인" and out["crosscheck"] == "실적보고서 단독"
+    assert out["rcept_no"] == "20261008000730" and out["available_dt"] == "20261008"
+
+
+def test_reconcile_does_not_adopt_an_unverified_result_report():
+    unreadable = {"offer_price": None, "status": "미확인", "rcept_no": "R1", "note": ""}
+    out = dart_terms.reconcile(unreadable, dart_terms.parse_result_report("자금조달 내용 없음"))
+    assert out["offer_price"] is None and out["status"] == "미확인" and out["crosscheck"] == "미실시"
 
 
 def test_to_text_strips_tags_and_entities():

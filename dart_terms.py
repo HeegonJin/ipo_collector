@@ -18,14 +18,18 @@ import re
 import zipfile
 
 import config
-from core import http
+from core import http, ids
 from core.schema import Status
 
 API = "https://opendart.fss.or.kr/api"
 _KIND = r"(보통주|[가-힣]{0,10}우선주|[가-힣]{0,10}종류주식)"
 _HEADER = re.compile(r"모집\(매출\)\s*방법\s*")
 # 종류 | 수량 | 액면가 | 모집(매출)가액 | 모집(매출)총액 | 방법  (표 머리글 바로 뒤에 이어지는 행들)
-_ROW = re.compile(rf"(?:(?:기명식|무기명식)\s*)?{_KIND}\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)\s+([\d,]+)\s+(\S+)\s*")
+_NUM = r"([\d,]+)\s*(?:주|원)?"   # 셀에 단위가 붙은 문서가 있다 ('3,000,000주', '9,200원')
+_ROW = re.compile(rf"(?:(?:기명식|무기명식)\s*)?{_KIND}\s+{_NUM}\s+{_NUM}\s+{_NUM}\s+{_NUM}\s+(\S+)\s*")
+# 정정사항 요약에 적히는 확정 값: '모집(매출)확정가액: 14,000원', '모집(매출) 확정총액: 16,800,000,000원'
+_CONF_PRICE = re.compile(r"모집\(매출\)\s*확정가액\s*[:：]?\s*([\d,]+)\s*원")
+_CONF_TOTAL = re.compile(r"모집\(매출\)\s*확정총액\s*[:：]?\s*([\d,]+)\s*원")
 _BAND = re.compile(r"(?:공모희망가액|희망공모가액)[^\d]{0,40}([\d,]+)\s*원\s*~\s*([\d,]+)\s*원")
 _SENT = re.compile(r"확정\s*공모가액(?:은|인|이)?\s*([\d,]+)\s*원|([\d,]+)\s*원으로\s*(?:최종\s*)?(?:확정|결정)")
 _TAG = re.compile(r"정정\s*(전|후)")
@@ -64,25 +68,56 @@ def parse_offer_terms(text: str) -> dict:
     out = {"offer_price": None, "stock_kind": None, "stock_cnt": None, "offer_amount": None, "sale_method": None,
            "band_low": _n(band.group(1)) if band else None, "band_high": _n(band.group(2)) if band else None,
            "sentence_prices": sorted(sent), "note": "", "status": Status.UNVERIFIED.value}
+    field = _confirmed_field(text)
     tables = _tagged_tables(text)
     after = [g for tag, g in tables if tag == "후"]
     plain = [g for tag, g in tables if tag is None]
     chosen = after[-1] if after else (plain[-1] if plain else None)
+    table_ok = False
+    if chosen is not None:
+        kind, cnt, _fv, price, total, method = _pick_row(chosen)
+        out.update(stock_kind=kind, stock_cnt=_n(cnt), offer_price=_n(price), offer_amount=_n(total),
+                   sale_method=method, source="table")
+        table_ok = abs(_n(cnt) * _n(price) - _n(total)) < 1
+        if not table_ok:
+            out["note"] = "수량×가액≠총액"
+    if field and not table_ok:      # 표가 없거나 검산이 안 되면 원문이 명시한 확정 값을 쓴다
+        out.update(offer_price=field["price"], offer_amount=field["total"], stock_cnt=field["cnt"], source="field",
+                   note="")
+        if chosen is None:
+            out["sale_method"] = None
+        return _finish(out, sent, field)
     if chosen is None:
         out["note"] = "정정 후 표 없음" if tables else "공모개요 표 없음"
         return out
-    kind, cnt, _fv, price, total, method = _pick_row(chosen)
-    out.update(stock_kind=kind, stock_cnt=_n(cnt), offer_price=_n(price), offer_amount=_n(total), sale_method=method)
-    if abs(_n(cnt) * _n(price) - _n(total)) >= 1:
-        out["note"] = "수량×가액≠총액"
-    elif sent and _n(price) not in sent:
-        out["note"] = f"표 {price} ≠ 본문 확정가 {sorted(sent)}"
+    return _finish(out, sent, field) if table_ok else out
+
+
+def _confirmed_field(text: str):
+    """'확정가액'·'확정총액' 필드. 총액이 가액으로 정확히 나뉠 때만 인정한다 (주식 수 = 총액 / 가액)."""
+    p, t = _CONF_PRICE.search(text), _CONF_TOTAL.search(text)
+    if not (p and t):
+        return None
+    price, total = _n(p.group(1)), _n(t.group(1))
+    if price <= 0 or total % price != 0:
+        return None
+    return {"price": price, "total": total, "cnt": total / price}
+
+
+def _finish(out: dict, sent: set, field) -> dict:
+    """본문 문장·확정 필드와 대조해 상태를 정한다. 값이 서로 다르면 확인으로 두지 않는다."""
+    price = out["offer_price"]
+    if field and out["source"] == "table" and field["price"] != price:
+        out["note"] = f"표 {int(price)} ≠ 확정가액 필드 {int(field['price'])}"
+    elif sent and price not in sent:
+        out["note"] = f"{out['source']} {int(price)} ≠ 본문 확정가 {sorted(int(s) for s in sent)}"
     else:
         out["status"] = Status.CONFIRMED.value
     return out
 
 
 def fetch_document_xml(rcept_no: str) -> str:
+    rcept_no = ids.safe_rcept_no(rcept_no)   # 캐시 파일 경로에 쓰기 전에 형식 검증
     path = config.RAW / "dart" / "doc" / f"{rcept_no}.xml"
     if path.exists():
         return path.read_text(encoding="utf-8")
@@ -120,15 +155,19 @@ def parse_result_report(text: str) -> dict:
 
 
 def reconcile(final: dict, result: dict | None) -> dict:
-    """확정 공시 값과 실적보고서 발행가액을 대조한다. 다르면 확인을 미확인으로 내리고 두 값을 메모에 남긴다.
-    실적보고서가 없거나 읽지 못하면 '미실시'로 두고 상태는 그대로 둔다. 미확인을 확인으로 올리지는 않는다."""
+    """확정 공시 값과 실적보고서 발행가액(실제 발행가, 수량×가액=총액 검산 통과분만)을 대조한다.
+    일치하면 확인으로 올리고, 다르면 미확인으로 내리며 두 값을 메모에 남긴다. 확정 공시에서 가격을 못 읽었으면
+    실적보고서 값을 단독 채택한다. 실적보고서가 없거나 읽지 못하면 '미실시'로 두고 상태는 그대로 둔다."""
     out = {**final, "crosscheck": "미실시"}
     if not result or result.get("issue_price") is None or result.get("status") != Status.CONFIRMED.value:
         return out
-    if final.get("offer_price") is None:
+    if final.get("offer_price") is None:   # 확정 공시에서 가격을 못 읽었다 → 실적보고서 값을 단독 채택
+        out.update(offer_price=result["issue_price"], status=Status.CONFIRMED.value, crosscheck="실적보고서 단독",
+                   rcept_no=result.get("rcept_no", ""), available_dt=result.get("rcept_dt"),
+                   note="확정 공시 표를 읽지 못해 실적보고서 발행가액 사용")
         return out
-    if final["offer_price"] == result["issue_price"]:
-        out["crosscheck"] = "일치"
+    if final["offer_price"] == result["issue_price"]:   # 독립된 두 출처가 일치하면 확인으로 올린다
+        out.update(crosscheck="일치", status=Status.CONFIRMED.value)
         return out
     out.update(crosscheck="불일치", status=Status.UNVERIFIED.value,
                note=f"실적보고서 {int(result['issue_price'])} ≠ 확정공시 {int(final['offer_price'])}")

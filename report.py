@@ -15,6 +15,15 @@ def _f(x):
     return None if x in ("", None) else float(x)
 
 
+def percentile(vals, q: float) -> float:
+    """선형보간 백분위수 (q: 0~1). 표본이 작아도 최솟값으로 쏠리지 않는다."""
+    s = sorted(vals)
+    pos = (len(s) - 1) * q
+    lo = int(pos)
+    hi = min(lo + 1, len(s) - 1)
+    return s[lo] + (s[hi] - s[lo]) * (pos - lo)
+
+
 def summarize(vals):
     vals = [v for v in vals if v is not None]
     if not vals:
@@ -29,7 +38,7 @@ def summarize(vals):
         "avg_win": st.mean(wins) if wins else 0.0,
         "avg_loss": st.mean(losses) if losses else 0.0,
         "worst": min(vals),
-        "p10": sorted(vals)[max(0, int(len(vals) * 0.1) - 1)],
+        "p10": percentile(vals, 0.10),
     }
 
 

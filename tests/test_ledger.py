@@ -85,6 +85,45 @@ def test_new_instance_continues_the_same_chain(ledger, tmp_path):
     assert again.verify() == [] and len(again.rows()) == 2
 
 
+def test_deleting_the_last_rows_is_detected_via_the_head_record(ledger, tmp_path):
+    for x in "ABC":
+        ledger.append_decision(decision(x), wallclock=AS_OF)
+    p = tmp_path / "ledger.jsonl"
+    lines = p.read_text(encoding="utf-8").splitlines()
+    p.write_text("\n".join(lines[:2]) + "\n", encoding="utf-8")        # 마지막 행 삭제: 해시 체인만으로는 안 보인다
+    problems = Ledger(p).verify()
+    assert problems and "마지막" in problems[0]
+
+
+def test_head_record_follows_every_append(ledger, tmp_path):
+    ledger.append_decision(decision("A"), wallclock=AS_OF)
+    again = Ledger(tmp_path / "ledger.jsonl")
+    again.append_decision(decision("B"), wallclock=AS_OF)
+    assert again.verify() == []
+
+
+def test_a_held_lock_blocks_appends_instead_of_forking_the_chain(tmp_path):
+    p = tmp_path / "ledger.jsonl"
+    (tmp_path / "ledger.jsonl.lock").write_text("held", encoding="utf-8")   # 다른 프로세스가 쓰는 중
+    with pytest.raises(TimeoutError):
+        Ledger(p, lock_timeout=0.2).append_decision(decision("A"), wallclock=AS_OF)
+    assert not p.exists()
+
+
+def test_lock_file_is_released_after_an_append(ledger, tmp_path):
+    ledger.append_decision(decision("A"), wallclock=AS_OF)
+    assert not (tmp_path / "ledger.jsonl.lock").exists()
+
+
+def test_concurrent_writers_keep_one_valid_chain(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    p = tmp_path / "ledger.jsonl"
+    with ThreadPoolExecutor(8) as ex:
+        list(ex.map(lambda i: Ledger(p).append_decision(decision(f"I{i}"), wallclock=AS_OF), range(24)))
+    led = Ledger(p)
+    assert len(led.rows()) == 24 and led.verify() == []
+
+
 def test_missing_values_are_stored_as_null_not_zero(ledger):
     a = ledger.append_decision(decision("A"), wallclock=AS_OF)
     s = Settlement("A", "A0", None, None, None, None, None, None, "계산 불가")
