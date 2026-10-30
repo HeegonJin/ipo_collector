@@ -78,10 +78,14 @@ def krx_listing_dates(base_date: str, detected: dict | None = None) -> dict:
     for code, d0 in (detected or {}).items():
         if code not in base and (dd := _history_list_dd(code, d0)):
             base[code] = (dd, "과거 스냅샷")
-    return {corp: (stock, *base[stock]) for stock, corp in dart_api.corp_code_map().items() if stock in base}
+    corp_map = dart_api.corp_code_map()
+    if any(code not in corp_map for code in (detected or {})):
+        corp_map = dart_api.corp_code_map(refresh=True)   # 캐시 이후에 상장한 종목은 매핑에 없다 → 한 번 새로 받는다
+    return {corp: (stock, *base[stock]) for stock, corp in corp_map.items() if stock in base}
 
 
-def universe_gaps(detected_rows: list[dict], registry: list[dict], last_seen: dict, last_day: str | None) -> list[dict]:
+def universe_gaps(detected_rows: list[dict], registry: list[dict], last_seen: dict, last_day: str | None,
+                  mapped: set | None = None) -> list[dict]:
     """KRX 가 신규상장으로 탐지했지만 매매 대상에 없는 종목과 그 사유 (합병·이전상장 / 신고서 없음 / 상장폐지 의심).
     이미 제외 사유가 있는 종목(스팩·코넥스 이전)은 제외 목록이 따로 있으므로 넣지 않는다."""
     by_stock = {r["stock_code"]: r for r in registry if r["stock_code"]}
@@ -90,7 +94,12 @@ def universe_gaps(detected_rows: list[dict], registry: list[dict], last_seen: di
         r = by_stock.get(d["code"])
         if d["excluded"] or (r and r["in_trading_universe"]):
             continue
-        reason = r["universe_note"] if r else "지분증권 신고서 없음(합병·이전상장 등)"
+        if r:
+            reason = r["universe_note"]
+        elif mapped is not None and d["code"] not in mapped:
+            reason = "DART 회사코드 매핑 없음(상장 직후라 아직 DART 목록에 없을 수 있음)"
+        else:
+            reason = "지분증권 신고서 없음(합병·이전상장 등)"
         if last_day and last_seen.get(d["code"], last_day) < last_day:
             reason = "상장폐지 의심: " + reason
         out.append({"name": d["name"], "code": d["code"], "list_date": d["list_date"], "reason": reason})
@@ -232,7 +241,7 @@ if __name__ == "__main__":
                        exclude={r["code"]: r["excluded"] for r in rows if r["excluded"]},
                        detected={r["code"]: r["list_date"] for r in rows if not r["excluded"]},
                        last_seen=last_seen, last_day=last_day)
-    gaps = universe_gaps(rows, reg, last_seen, last_day)
+    gaps = universe_gaps(rows, reg, last_seen, last_day, mapped=set(dart_api.corp_code_map()))
     print(f"[DART] {write(gaps, ['name', 'code', 'list_date', 'reason'], 'universe_gaps.csv')} "
           f"(KRX 탐지 대비 누락 {len(gaps)}건, 상장폐지 의심 {sum(g['reason'].startswith('상장폐지') for g in gaps)}건, "
           f"대상 중 상장 뒤 사라진 종목 {sum(bool(r['delisted_after_listing']) for r in reg if r['in_trading_universe'])}건)")

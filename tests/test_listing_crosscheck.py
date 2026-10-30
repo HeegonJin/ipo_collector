@@ -71,5 +71,23 @@ def test_detected_listings_returns_every_detected_row_with_its_exclusion(monkeyp
     assert rows["SP"]["excluded"] == "스팩·리츠" and rows["KNX1"]["excluded"] == "코넥스 이전상장"
 
 
+def test_spac_is_excluded_by_name_or_by_the_spac_section():
+    """'…호기업인수목적' 이름과 SECT_TP_NM 이 SPAC 인 종목은 '스팩'·'SPAC' 키워드가 없어도 제외한다 (2026-10-27 실측 사례)."""
+    from collections import OrderedDict
+    import test_logic
+
+    def r(code, name, sect):
+        return {**test_logic.row(code, name, 2000, 0), "SECT_TP_NM": sect}
+
+    ksq = OrderedDict([("20230103", [test_logic.row("OLD", "기존", 1000, 0)]),
+                       ("20230105", [test_logic.row("OLD", "기존", 1000, 0),
+                                     r("S1", "에스케이증권제14호기업인수목적", "SPAC(소속부없음)"),
+                                     r("S2", "이름은평범한회사", "SPAC(소속부없음)"),
+                                     r("N1", "일반기업", "벤처기업부")])])
+    rows = {x["code"]: x for x in build_sample.detect_listings(ksq, OrderedDict(), "20230105")}
+    assert rows["S1"]["excluded"] == "스팩·리츠" and rows["S2"]["excluded"] == "스팩·리츠"
+    assert rows["N1"]["excluded"] == ""
+
+
 def test_new_columns_are_written_to_the_sample_csv():
     assert {"list_dd", "list_dd_check"} <= set(build_sample.COLUMNS)

@@ -141,6 +141,12 @@ def test_delisted_stock_is_reported_and_sensitivities_include_it(world):
     assert "폐지/거래정지" in text and "전손" in text and "마지막 종가" in text
 
 
+def test_result_doc_carries_the_krx_attribution_required_by_the_terms(world):
+    """KRX OPEN API 약관 Art.10(3): 결과로 만든 페이지에는 "KRX statistical information" 을 명시해야 한다."""
+    out = real_a0.run("20230106")
+    assert "KRX statistical information" in Path(out["doc"]).read_text(encoding="utf-8")
+
+
 def test_run_writes_result_csv_and_doc(world):
     out = real_a0.run("20230106")
     assert Path(out["csv"]).exists() and Path(out["doc"]).exists()

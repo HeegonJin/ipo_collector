@@ -97,7 +97,8 @@ def detect_listings(ksq_days, knx_days, sample_start):
             offer_est = close - cmp_prev if close is not None and cmp_prev is not None else None
 
             reason = ""
-            if any(k in name for k in config.EXCLUDE_NAME_KEYWORDS):
+            # 이름 키워드 또는 소속부가 SPAC 이면 스팩이다 ('…호기업인수목적' 처럼 키워드가 없는 이름도 소속부로 거른다)
+            if any(k in name for k in config.EXCLUDE_NAME_KEYWORDS) or (r.get("SECT_TP_NM") or "").startswith("SPAC"):
                 reason = "스팩·리츠"
             elif code in konex_codes or name in konex_names:
                 reason = "코넥스 이전상장"

@@ -127,6 +127,7 @@ def _render_doc(rows, sm, sensitivity, costs):
 - 대상: 코스닥 신규상장 중 DART 지분증권 신고서가 있고 KRX 종목기본정보에 상장일이 있는 종목 (레지스트리 `in_trading_universe`)
 - 기간: {dates[0] if dates else '-'} ~ {dates[-1] if dates else '-'} · 대상 {len(rows)}건 · 계산 가능 {len(sm['usable'])}건 · 계산 불가 {len(rows) - len(sm['usable'])}건
 - 출처: KRX Open API 코스닥 일별매매정보 (원본 `data/0_raw/krx`), DART 발행조건확정 공시 원문 (확정 공모가)
+- 이 문서는 **KRX statistical information** (한국거래소 통계정보)을 이용해 만들었다 (KRX OPEN API 약관 Art.10(3)). 원천 데이터는 비상업 목적으로만 쓰며 제3자에게 제공하지 않는다 (Art.6(2), Art.11(2)).
 - 학습/검증 분리: 이 결과는 기준값이 없는 기준선이라 분리하지 않음
 
 ## 비용·체결 가정

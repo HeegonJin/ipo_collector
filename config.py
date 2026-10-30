@@ -28,7 +28,7 @@ SAMPLE_START = "20230701"   # 이 날 이후 '처음 거래된' 종목만 신규
 BUFFER_START = "20230101"   # 탐지용 여유 구간. 이 기간에 이미 거래되던 종목은 신규상장이 아님
 
 # ── 제외 규칙 (D11 + 기획 v3.1: 스팩·리츠·코넥스 이전 제외) ──
-EXCLUDE_NAME_KEYWORDS = ["스팩", "SPAC", "리츠"]
+EXCLUDE_NAME_KEYWORDS = ["스팩", "SPAC", "리츠", "기업인수목적"]
 
 # ── 비용 가정 (results/README: 반드시 명시) ──
 # 출처는 config/costs_v1.yaml 하나뿐이다 (사람이 고정, 바꾸려면 새 버전 파일). 여기서는 읽어 올 뿐 따로 두지 않는다.

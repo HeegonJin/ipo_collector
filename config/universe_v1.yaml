@@ -1,6 +1,6 @@
 version: universe_v1
 buffer_start: "2023-01-01"    # 신규상장 탐지용 여유 구간
 sample_start: "2023-07-01"
-exclude_name_keywords: ["스팩", "SPAC", "리츠"]
+exclude_name_keywords: ["스팩", "SPAC", "리츠", "기업인수목적"]
 # 거래 대상: 코스닥 공모 신규상장. 427개사(코스피, 2021~)는 registry 에 넣되 in_trading_universe=false.
 trading_market: KOSDAQ

@@ -39,9 +39,10 @@ def _get(path, **params):
     return r
 
 
-def corp_code_map():
+def corp_code_map(refresh: bool = False):
+    """종목코드 → corp_code. 처음 한 번 받아 캐시하며, 캐시 이후에 상장한 종목은 없으므로 필요하면 refresh=True 로 새로 받는다."""
     cache = config.RAW / "dart" / "corp_codes.json"
-    if cache.exists():
+    if cache.exists() and not refresh:
         return json.loads(cache.read_text(encoding="utf-8"))
     z = zipfile.ZipFile(io.BytesIO(_get("corpCode.xml").content))
     root = ET.fromstring(z.read(z.namelist()[0]))

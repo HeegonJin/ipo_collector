@@ -126,6 +126,37 @@ def test_delisted_stock_gets_its_listing_date_from_the_snapshot_of_its_listing_d
     assert calls == ["20261023", "20250310"]        # 현재 스냅샷에 있는 종목은 과거 조회를 하지 않는다
 
 
+def test_corp_code_map_is_refreshed_once_when_a_detected_listing_is_not_mapped(monkeypatch):
+    """캐시된 회사코드 목록 이후에 상장한 종목은 매핑에 없다 → 한 번 새로 받아 다시 찾는다."""
+    calls = []
+
+    def fake_map(refresh=False):
+        calls.append(refresh)
+        return {"195990": "00534729", "0053F0": "01999999"} if refresh else {"195990": "00534729"}
+
+    monkeypatch.setattr(b.krx_api, "fetch", lambda service, d: [{"ISU_SRT_CD": "195990", "LIST_DD": "20261023"},
+                                                                {"ISU_SRT_CD": "0053F0", "LIST_DD": "20261029"}])
+    monkeypatch.setattr(b.dart_api, "corp_code_map", fake_map)
+    got = b.krx_listing_dates("20261029", detected={"0053F0": "20261029"})
+    assert got["01999999"][0] == "0053F0" and calls == [False, True]
+
+
+def test_no_refresh_when_every_detected_listing_is_already_mapped(monkeypatch):
+    calls = []
+    monkeypatch.setattr(b.krx_api, "fetch", lambda service, d: [{"ISU_SRT_CD": "195990", "LIST_DD": "20261023"}])
+    monkeypatch.setattr(b.dart_api, "corp_code_map", lambda refresh=False: calls.append(refresh) or {"195990": "00534729"})
+    b.krx_listing_dates("20261023", detected={"195990": "20261023"})
+    assert calls == [False]
+
+
+def test_gap_reason_distinguishes_a_missing_corp_code_from_a_missing_registration():
+    detected = [{"name": "신규", "code": "N", "list_date": "20261029", "excluded": ""},
+                {"name": "합병", "code": "M", "list_date": "20260101", "excluded": ""}]
+    gaps = b.universe_gaps(detected, [], {}, "20261029", mapped={"M"})       # N 만 회사코드 매핑이 없다
+    by = {g["code"]: g["reason"] for g in gaps}
+    assert by["N"].startswith("DART 회사코드 매핑 없음") and by["M"].startswith("지분증권 신고서 없음")
+
+
 def test_stock_missing_from_both_snapshots_is_left_out_not_guessed(monkeypatch):
     monkeypatch.setattr(b.krx_api, "fetch", lambda service, d: [{"ISU_SRT_CD": "195990", "LIST_DD": "20261023"}])
     monkeypatch.setattr(b.dart_api, "corp_code_map", lambda: {"195990": "00534729", "999999": "00999999"})
