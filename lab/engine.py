@@ -15,10 +15,14 @@ import report
 from evaluate.outcomes import _net
 
 CONDITIONS = [
-    {"id": "band_pos", "label": "확정 공모가의 희망밴드 내 위치", "hint": "0=하단, 1=상단, 1 초과=밴드 상단 초과",
-     "phase": "pre", "unit": "", "min": -1.0, "max": 3.0, "step": 0.25, "in_design": False},
-    {"id": "offer_amount_bil", "label": "공모금액", "hint": "공모 주식 수 × 확정 공모가",
-     "phase": "pre", "unit": "억원", "min": 0.0, "max": 3000.0, "step": 50.0, "in_design": False},
+    {"id": "demand_ratio", "label": "기관 수요예측 경쟁률", "hint": "기관 참여 수량 ÷ 기관 배정 물량 (높을수록 인기)",
+     "phase": "pre", "unit": "배", "min": 0.0, "max": 2500.0, "step": 50.0, "in_design": True},
+    {"id": "retail_ratio", "label": "일반청약 경쟁률", "hint": "일반 청약 수량 ÷ 일반 배정 수량",
+     "phase": "pre", "unit": "배", "min": 0.0, "max": 3000.0, "step": 50.0, "in_design": True},
+    {"id": "final_commit_pct", "label": "기관 배정분 의무보유 확약률", "hint": "기관에 배정된 물량 중 확약한 비중 (최종 배정 기준)",
+     "phase": "pre", "unit": "%", "min": 0.0, "max": 100.0, "step": 5.0, "in_design": True},
+    {"id": "float_pct", "label": "상장 직후 유통가능 비율", "hint": "상장 직후 바로 팔 수 있는 주식 ÷ 상장 주식",
+     "phase": "pre", "unit": "%", "min": 0.0, "max": 100.0, "step": 2.5, "in_design": True},
     {"id": "d0_ret_vs_offer", "label": "상장일 종가의 공모가 대비 수익률", "hint": "음수면 공모가 아래로 마감",
      "phase": "d0", "unit": "%", "min": -50.0, "max": 400.0, "step": 10.0, "in_design": True},
     {"id": "d0_drop_from_high", "label": "상장일 종가의 당일 고점 대비", "hint": "음수일수록 고점에서 많이 밀림",

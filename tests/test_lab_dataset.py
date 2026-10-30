@@ -31,39 +31,41 @@ def make_index(stock_days=DAYS, idx_closes=None):
 
 
 def reg(**kw):
-    base = {"ipo_id": "I1", "corp_name": "가나다", "stock_code": "ABC", "list_dd": "20250103",
-            "offer_price_final": "10000", "band_low": "9000", "band_high": "10000"}
+    base = {"ipo_id": "I1", "corp_name": "가나다", "stock_code": "ABC", "list_dd": "20250103", "offer_price_final": "10000"}
     base.update(kw)
     return base
 
 
-def terms(**kw):
-    base = {"ipo_id": "I1", "stock_cnt": "2000000", "rcept_no": "R1"}
+def dem(**kw):
+    base = {"ipo_id": "I1", "demand_ratio": "850.5", "demand_status": "확인", "retail_ratio": "1200.0", "final_commit_ratio": "0.2494",
+            "alloc_status": "확인", "float_pct": "28.5", "float_status": "확인"}
     base.update(kw)
     return base
 
 
-def one(registry=None, trm=None, index=None, splits=SPLITS):
-    rows = build_rows([registry or reg()], [trm or terms()], index or make_index(), splits)
+def one(registry=None, demand=None, index=None, splits=SPLITS):
+    rows = build_rows([registry or reg()], index or make_index(), splits, {"I1": demand} if demand else None)
     assert len(rows) == 1
     return rows[0]
 
 
-def test_band_position_is_zero_at_the_bottom_one_at_the_top_and_above_one_over_the_band():
-    assert one(reg(offer_price_final="9000"))["band_pos"] == pytest.approx(0.0)
-    assert one(reg(offer_price_final="10000"))["band_pos"] == pytest.approx(1.0)
-    assert one(reg(offer_price_final="11000"))["band_pos"] == pytest.approx(2.0)
-    assert one(reg(offer_price_final="8000"))["band_pos"] == pytest.approx(-1.0)
+def test_demand_features_are_attached_only_when_they_passed_the_cross_checks():
+    r = one(demand=dem())
+    assert r["demand_ratio"] == pytest.approx(850.5) and r["retail_ratio"] == pytest.approx(1200.0)
+    assert r["final_commit_pct"] == pytest.approx(24.94) and r["float_pct"] == pytest.approx(28.5)
 
 
-def test_degenerate_or_missing_band_gives_none_not_zero():
-    assert one(reg(band_low="10000", band_high="10000"))["band_pos"] is None
-    assert one(reg(band_low="", band_high=""))["band_pos"] is None
+def test_unconfirmed_or_missing_demand_values_are_none_not_zero():
+    r = one(demand=dem(demand_status="미확인", alloc_status="미확인", float_status="미확인"))
+    assert r["demand_ratio"] is None and r["retail_ratio"] is None and r["final_commit_pct"] is None and r["float_pct"] is None
+    r = one()                                                                # 수요 마트에 종목이 없으면 전부 None
+    assert all(r[k] is None for k in ("demand_ratio", "retail_ratio", "final_commit_pct", "float_pct"))
+    assert one(demand=dem(demand_ratio=""))["demand_ratio"] is None
 
 
-def test_offer_amount_is_shares_times_price_in_hundred_millions_and_none_when_shares_unknown():
-    assert one()["offer_amount_bil"] == pytest.approx(200.0)                  # 2,000,000주 × 10,000원 = 200억
-    assert one(trm=terms(stock_cnt=""))["offer_amount_bil"] is None
+def test_design_external_features_are_gone():
+    r = one(demand=dem())
+    assert "band_pos" not in r and "offer_amount_bil" not in r
 
 
 def test_listing_day_values_are_percent_changes_with_the_index_from_the_previous_day():
@@ -111,4 +113,4 @@ def test_raw_loader_keeps_the_daily_high_and_low(monkeypatch, tmp_path):
 
 def test_stock_without_a_listing_day_bar_is_skipped_not_zero_filled():
     idx = BarIndex([bar(d, CALENDAR_CODE, None, None, None, None) for d in DAYS])
-    assert build_rows([reg()], [terms()], idx, SPLITS) == []
+    assert build_rows([reg()], idx, SPLITS) == []

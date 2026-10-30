@@ -41,7 +41,9 @@ class Lab:
         splits = {}
         for name in ("train", "valid", "forward"):
             splits[name] = sum(1 for r in self.rows if r["split"] == name)
-        return {"conditions": engine.CONDITIONS, "entries": engine.ENTRIES, "holds": list(engine.HOLDS),
+        train = [r for r in self.rows if r["split"] == "train"]
+        coverage = {c["id"]: sum(r.get(c["id"]) is not None for r in train) for c in engine.CONDITIONS}
+        return {"conditions": engine.CONDITIONS, "entries": engine.ENTRIES, "holds": list(engine.HOLDS), "coverage": coverage,
                 "min_n": self.cfg["min_n"], "trials_warn_at": self.cfg["trials_warn_at"],
                 "confirm_phrase": self.cfg["confirm_phrase"], "split_sizes": splits, **self._meta}
 
@@ -108,13 +110,13 @@ def load_real(end: str, start: str | None = None) -> Lab:
     mart = config.MART
     registry = _read_csv(mart / "dart_ipo_registry.csv")
     universe = [r for r in registry if r["in_trading_universe"] == "True" and r["list_dd"]]
-    terms = _read_csv(mart / "dart_offer_terms.csv")
+    demand = {r["ipo_id"]: r for r in _read_csv(mart / "dart_demand.csv")} if (mart / "dart_demand.csv").exists() else {}
     codes = {r["stock_code"] for r in universe}
     index = BarIndex(list(iter_filtered_bars(start, end, codes)) + calendar_bars(start, end) + list(iter_index_bars(start, end)))
     splits = settings.load_splits()
     years = sorted({int(r["list_dd"][:4]) for r in universe}) or [2023]
     costs = settings.load_costs(years[0], years[-1])
-    rows = build_rows(universe, terms, index, splits)
+    rows = build_rows(universe, index, splits, demand)
     cfg = guards.load_lab_config()
     trials = guards.TrialLog(config.META / "lab_trials.csv")
     gate = guards.ValidationGate(rows, costs, trials, config.META / "validation_runs.csv", cfg)

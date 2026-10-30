@@ -15,16 +15,16 @@ from lab.guards import (TrialLog, ValidationGate, chance_best, load_lab_config, 
 COSTS = {"commission_per_side": 0.0, "slippage_per_side": 0.0, "kosdaq_sell_tax": {2025: 0.0}}
 
 
-def row(i, band_pos, ret, split="train"):
+def row(i, float_pct, ret, split="train"):
     px = 10000.0 * (1 + ret)
     return {"ipo_id": f"I{i}", "name": f"종목{i}", "code": f"C{i}", "list_date": "20250103", "split": split,
-            "offer_price": 10000.0, "band_pos": band_pos, "offer_amount_bil": 100.0, "d0_ret_vs_offer": 0.0,
+            "offer_price": 10000.0, "float_pct": float_pct, "retail_ratio": 100.0, "d0_ret_vs_offer": 0.0,
             "d0_drop_from_high": -1.0, "d0_index_chg": 0.0, "close_d0": 10000.0,
             "open_d": {k: px for k in range(7)}, "limit_up": False}
 
 
 def params(lo, hi, hold=1):
-    return {"entry": "d0_close", "hold": hold, "conditions": {"band_pos": {"enabled": True, "lo": lo, "hi": hi}}}
+    return {"entry": "d0_close", "hold": hold, "conditions": {"float_pct": {"enabled": True, "lo": lo, "hi": hi}}}
 
 
 # ── 1. 최소 표본 수 ─────────────────────────────────────────────
@@ -46,8 +46,8 @@ def test_lab_config_has_a_sane_minimum_and_a_confirmation_phrase():
 # ── 2. 시도 횟수 카운터 ─────────────────────────────────────────
 def test_params_hash_ignores_disabled_conditions_and_key_order():
     a = normalize({"entry": "d0_close", "hold": 1, "conditions": {
-        "band_pos": {"enabled": True, "lo": 0.5, "hi": 2.0}, "d0_index_chg": {"enabled": False, "lo": -1, "hi": 1}}})
-    b = normalize({"conditions": {"band_pos": {"hi": 2.0, "lo": 0.5, "enabled": True}}, "hold": 1, "entry": "d0_close"})
+        "float_pct": {"enabled": True, "lo": 0.5, "hi": 2.0}, "d0_index_chg": {"enabled": False, "lo": -1, "hi": 1}}})
+    b = normalize({"conditions": {"float_pct": {"hi": 2.0, "lo": 0.5, "enabled": True}}, "hold": 1, "entry": "d0_close"})
     assert params_hash(a) == params_hash(b) != params_hash(normalize(params(0.5, 2.5)))
 
 

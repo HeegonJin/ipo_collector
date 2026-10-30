@@ -90,6 +90,33 @@ def test_commitment_variants_total_row_name_period_label_and_stray_dot_cells():
     assert d["commit_ratio"] == 198_699_000 / 39_854_000          # 간단한 표는 분모를 수요예측 참여 수량으로 한다
 
 
+def test_commitment_total_cell_that_is_a_dash_is_rebuilt_from_the_column_quantities():
+    # 3개월 확약 행의 합계 수량 칸이 '-' 지만 열별 수량(100+50+21)이 있다 → 합계 171 로 복원, 전체 합 검산은 그대로 통과해야 한다
+    t = ("(다) 의무보유 확약 기관수 및 신청수량 건수 수량 건수 수량 건수 수량 6개월 확약 - - - - - - "
+         "3개월 확약 2 100 1 50 1 21 4 - 미확약 8 700 2 100 1 29 11 829 합 계 10 800 3 150 2 50 15 1,000 주1)")
+    d = dart_demand.parse_demand(DEMAND.replace("39,854,000", "1,000") + t)
+    assert d["commit_qty"]["3m"] == 171 and d["commit_status"] == "확인"
+    wrong = dart_demand.parse_demand(DEMAND.replace("39,854,000", "1,000") + t.replace("11 829", "11 700"))
+    assert wrong["commit_status"] == "미확인"                                        # 복원해도 합이 안 맞으면 믿지 않는다
+
+
+def test_commitment_table_with_a_price_cell_per_column_reads_the_quantity_not_the_price():
+    t = ("(다) 의무보유확약기간별 수요예측 참여내역 건수 수량 신청가격 건수 수량 신청가격 건수 수량 신청가격 "
+         "6개월 확약 - - - - - - - - - 3개월 확약 3 418,400 7,000 - - - 3 418,400 7,000 "
+         "미확약 9 8,000,000 9,756 1,392 667,255,400 7,271 1,401 675,255,400 7,270 "
+         "합 계 9 8,208,000 9,756 1,395 667,255,400 7,267 1,407 675,673,800 7,267 주)")
+    d = dart_demand.parse_demand(t)
+    assert d["commit_qty"]["3m"] == 418_400 and d["commit_ratio"] == 418_400 / 675_673_800
+
+
+def test_commitment_table_total_within_two_percent_of_the_demand_total_is_accepted_with_a_note():
+    base = DEMAND.replace("39,854,000", "40,000,000") + COMMIT                       # 표 합계 39,854,000 = 수요예측 합계의 99.6%
+    d = dart_demand.parse_demand(base)
+    assert d["commit_status"] == "확인" and "수요예측" in d["commit_note"]
+    far = DEMAND.replace("39,854,000", "60,000,000") + COMMIT
+    assert dart_demand.parse_demand(far)["commit_status"] == "미확인"
+
+
 def test_no_commitment_table_gives_unknown():
     d = dart_demand.parse_demand(DEMAND)
     assert d["commit_ratio"] is None and d["commit_status"] == "미확인"
@@ -121,6 +148,13 @@ def test_float_without_any_total_is_unconfirmed():
 def test_lockup_schedule_groups_shares_by_months_after_listing():
     d = dart_demand.parse_demand(FLOAT_A)
     assert d["lockups"] == {30: 2_562_856, 24: 906_006, 1: 1_283_293, 12: 884_379, 3: 253_406}
+
+
+def test_lockup_sentences_before_the_float_sentence_are_still_found():
+    text = ("300주(공모 후 30.00%)는 상장일로부터 6개월 간 의무보유합니다. 300주(공모 후 30.00%)는 상장일로부터 1년 간 의무보유합니다. "
+            "상장 후 당사 발행주식총수 (1,000주)의 40.00%에 해당하는 400주는 상장 직후 유통가능물량입니다.")
+    d = dart_demand.parse_demand(text)
+    assert d["lockups"] == {6: 300, 12: 300} and d["lockup_status"] == "확인"
 
 
 def test_lockup_total_is_listed_minus_float_and_schedule_is_a_lower_bound():

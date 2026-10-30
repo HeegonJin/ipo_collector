@@ -15,8 +15,9 @@ function Badge({ kind, children }: { kind: "warn" | "info" | "ok"; children: Rea
   return <span className={`badge ${kind}`}>{children}</span>;
 }
 
-function ConditionRow({ c, state, onChange }: {
-  c: Condition; state: Params["conditions"][string]; onChange: (s: Params["conditions"][string]) => void;
+function ConditionRow({ c, state, known, total, onChange }: {
+  c: Condition; state: Params["conditions"][string]; known: number; total: number;
+  onChange: (s: Params["conditions"][string]) => void;
 }) {
   const set = (p: Partial<typeof state>) => onChange({ ...state, ...p });
   return (
@@ -27,7 +28,7 @@ function ConditionRow({ c, state, onChange }: {
         {c.phase === "d0" ? <Badge kind="warn">상장일 마감 후 값</Badge> : <Badge kind="ok">상장 전 확정</Badge>}
         {!c.in_design && <Badge kind="info">설계도 외 탐색</Badge>}
       </label>
-      <div className="hint">{c.hint}</div>
+      <div className="hint">{c.hint} · 학습 구간 {total}종목 중 값 있는 종목 {known}{known < total && <span className="warn-text"> (나머지는 켜면 제외)</span>}</div>
       {state.enabled && (
         <div className="range">
           {(["lo", "hi"] as const).map((k) => (
@@ -176,7 +177,7 @@ export default function App() {
           </fieldset>
           <h2>종목 조건</h2>
           {meta.conditions.map((c) => (
-            <ConditionRow key={c.id} c={c} state={params.conditions[c.id]}
+            <ConditionRow key={c.id} c={c} state={params.conditions[c.id]} known={meta.coverage[c.id] ?? 0} total={meta.split_sizes.train}
               onChange={(s) => setParams({ ...params, conditions: { ...params.conditions, [c.id]: s } })} />
           ))}
           <div className="runbar">

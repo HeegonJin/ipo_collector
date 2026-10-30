@@ -35,6 +35,7 @@ _LOCK = re.compile(r"([\d,]+)\s*주\s*\(\s*(?:공모\s*후\s*)?[\d.]+\s*%\s*\)\s
 _ALLOC_ROW = re.compile(r"(기관투자자|일반투자자)\s+([\d,]+)\s+[\d.]+\s+([\d,]+)\s+([\d,]+)\s+[\d,]+\s+[\d.]+\s+[\d,]+\s+([\d,]+)")
 _ALLOC_TOTAL = re.compile(r"\s계\s+([\d,]+)\s")
 _FLOAT_TOL_PP = 0.05
+_COMMIT_TOTAL_GAP = 0.02          # 확약 표 합계와 수요예측 참여 수량이 이 비율까지 다른 것은 허용 (표 내부 합은 정확히 맞아야 한다)
 
 
 def _n(tok: str) -> float:
@@ -69,12 +70,22 @@ def _parse_demand_table(text: str, offer_shares, out: dict) -> None:
     out.update(demand_status=OK, demand_note="")
 
 
-def _period_qty(window: str) -> dict:
+def _qty(tokens: list[str], stride: int) -> int:
+    """한 행의 합계 열 수량. 열마다 (건수, 수량) 이면 stride 2, (건수, 수량, 신청가격) 이면 3 이라 수량은 뒤에서 stride-1 번째.
+    그 칸이 '-' 인데 다른 열에는 수량이 있으면 열별 수량의 합으로 복원한다 (복원값도 아래 전체 합 검산을 통과해야 쓴다)."""
+    tok = tokens[-(stride - 1)] if stride == 2 else tokens[-2]
+    if tok in ("-", ".") and len(tokens) % stride == 0 and len(tokens) >= 2 * stride:
+        rebuilt = sum(_n(tokens[p]) for p in range(1, len(tokens) - stride, stride))
+        return int(rebuilt)
+    return int(_n(tok))
+
+
+def _period_qty(window: str, stride: int = 2) -> dict:
     qty = {key: 0 for _, key in _PERIODS}
     for label, key in _PERIODS:
         rows = list(re.finditer(rf"{label}(?:\s*확약)?{_SEQ}", window))
         if rows:                                                              # 행이 없으면 0 으로 두되 합 검산이 잡아낸다
-            qty[key] += int(_n(_toks(rows[-1].group(1))[-1]))
+            qty[key] += _qty(_toks(rows[-1].group(1)), stride)
     return qty
 
 
@@ -100,14 +111,18 @@ def _parse_commit_table(text: str, out: dict) -> None:
     if not found:
         return _parse_simple_commit(text, out)
     m = found[-1]
-    unconfirmed, total = int(_n(_toks(m.group(1))[-1])), int(_n(_toks(m.group(2))[-1]))
-    qty = _period_qty(text[max(0, m.start() - 1500): m.start()])
+    window = text[max(0, m.start() - 1500): m.start()]
+    stride = 3 if "신청가격" in window[window.rfind("건수"):] else 2          # 열마다 신청가격 칸이 더 있는 서식
+    unconfirmed, total = _qty(_toks(m.group(1)), stride), _qty(_toks(m.group(2)), stride)
+    qty = _period_qty(window, stride)
     committed = sum(qty.values())
     out.update(commit_qty=qty, commit_ratio=committed / total if total else None)
     if committed + unconfirmed != total:
         out.update(commit_status=NO, commit_note=f"확약 {committed:,} + 미확약 {unconfirmed:,} ≠ 합계 {total:,}")
     elif out["demand_qty"] is not None and total != out["demand_qty"]:
-        out.update(commit_status=NO, commit_note=f"확약 표 합계 {total:,} ≠ 수요예측 참여 수량 {out['demand_qty']:,}")
+        gap = abs(total - out["demand_qty"]) / out["demand_qty"]
+        note = f"확약 표 합계 {total:,} 가 수요예측 참여 수량 {out['demand_qty']:,} 와 {gap * 100:.1f}% 다름"
+        out.update(commit_status=OK if gap <= _COMMIT_TOTAL_GAP else NO, commit_note=note)   # 표 자체 합은 맞다: 집계 대상이 약간 다른 문서
     else:
         out.update(commit_status=OK, commit_note="")
 
@@ -132,6 +147,19 @@ def _months(y, m, d):
     return round(int(d) / 30, 1) if d else None
 
 
+def _lockup_schedule(region: str) -> dict:
+    """'N주(공모 후 x%)는 상장일로부터 K개월/년/일' 문장을 개월 수별 주식 수로 묶는다. 같은 (주식 수, 기간) 은 한 번만 센다."""
+    seen, lockups = set(), {}
+    for m in _LOCK.finditer(region):
+        months = _months(m.group(2), m.group(3), m.group(4))
+        key = (m.group(1), months)
+        if months is None or key in seen:
+            continue
+        seen.add(key)
+        lockups[months] = lockups.get(months, 0) + int(_n(m.group(1)))
+    return lockups
+
+
 def _parse_float_and_lockups(text: str, out: dict) -> None:
     last = _last_float(text)
     if last:
@@ -146,18 +174,11 @@ def _parse_float_and_lockups(text: str, out: dict) -> None:
             out.update(float_status=NO, float_note=f"유통가능 {shares:,.0f} ÷ 상장 {total:,.0f} = {shares / total * 100:.2f}% ≠ 문장 {pct}%")
         else:
             out.update(float_status=OK, float_note="")
-    region = text[last[0]: last[0] + 4000] if last else text            # 정정 전·후가 함께 있으면 마지막 문장 뒤만 본다
-    seen, lockups = set(), {}
-    for m in _LOCK.finditer(region):
-        months = _months(m.group(2), m.group(3), m.group(4))
-        key = (m.group(1), months)
-        if months is None or key in seen:
-            continue
-        seen.add(key)
-        lockups[months] = lockups.get(months, 0) + int(_n(m.group(1)))
-    out["lockups"] = lockups
+    # 정정 전·후가 함께 있으면 마지막 유통가능 문장 뒤만 먼저 보고, 거기 없으면 문서 전체에서 찾는다 (락업 문장이 앞 절에 있는 문서가 있다)
+    out["lockups"] = _lockup_schedule(text[last[0]: last[0] + 4000] if last else text) or _lockup_schedule(text)
     if out["listed_shares"] is not None and out["float_shares"] is not None:
         out["locked_total"] = out["listed_shares"] - out["float_shares"]
+        lockups = out["lockups"]
         out["lockup_status"] = OK if lockups and abs(sum(lockups.values()) - out["locked_total"]) <= out["locked_total"] * 0.001 else NO
 
 

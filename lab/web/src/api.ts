@@ -6,7 +6,7 @@ export type Meta = {
   conditions: Condition[];
   entries: Record<string, { label: string; in_design: boolean }>;
   holds: number[]; min_n: number; trials_warn_at: number; confirm_phrase: string;
-  split_sizes: Record<string, number>; data_end?: string;
+  split_sizes: Record<string, number>; coverage: Record<string, number>; data_end?: string;
   splits?: Record<string, { start: string; end: string }>;
 };
 export type CondState = { enabled: boolean; lo: number; hi: number };

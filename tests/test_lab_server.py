@@ -18,10 +18,10 @@ COSTS = {"commission_per_side": 0.0, "slippage_per_side": 0.0, "kosdaq_sell_tax"
 CFG = {"min_n": 5, "confirm_phrase": "검증 구간을 엽니다", "trials_warn_at": 3}
 
 
-def row(i, band_pos, ret, split="train"):
+def row(i, float_pct, ret, split="train"):
     px = 10000.0 * (1 + ret)
     return {"ipo_id": f"I{i}", "name": f"종목{i}", "code": f"C{i}", "list_date": "20250103", "split": split,
-            "offer_price": 10000.0, "band_pos": band_pos, "offer_amount_bil": 100.0, "d0_ret_vs_offer": 20.0,
+            "offer_price": 10000.0, "float_pct": float_pct, "retail_ratio": 100.0, "d0_ret_vs_offer": 20.0,
             "d0_drop_from_high": -5.0, "d0_index_chg": 0.5, "close_d0": 10000.0,
             "open_d": {k: px for k in range(7)}, "limit_up": False}
 
@@ -33,14 +33,21 @@ def make_lab(tmp_path):
     return Lab(rows, COSTS, log, gate, dict(CFG), meta={"train_window": "x"})
 
 
-P = {"entry": "d0_close", "hold": 1, "conditions": {"band_pos": {"enabled": True, "lo": 0.5, "hi": 1.5}}}
+P = {"entry": "d0_close", "hold": 1, "conditions": {"float_pct": {"enabled": True, "lo": 0.5, "hi": 1.5}}}
 
 
 def test_meta_labels_design_external_conditions_and_lookahead_phases(tmp_path):
     meta = make_lab(tmp_path).meta()
     conds = {c["id"]: c for c in meta["conditions"]}
-    assert conds["band_pos"]["in_design"] is False and conds["d0_ret_vs_offer"]["phase"] == "d0"
+    assert conds["float_pct"]["in_design"] is True and conds["d0_ret_vs_offer"]["phase"] == "d0"
     assert meta["entries"]["d1_open"]["in_design"] is False and meta["min_n"] == 5
+
+
+def test_meta_reports_how_many_training_stocks_have_a_value_for_each_condition(tmp_path):
+    lab = make_lab(tmp_path)
+    lab.rows[0]["float_pct"] = None                              # 값을 모르는 종목은 센다 → 조건을 켜면 그만큼 제외된다
+    cov = lab.meta()["coverage"]
+    assert cov["float_pct"] == 11 and cov["d0_ret_vs_offer"] == 12
 
 
 def test_count_reports_n_without_counting_a_trial(tmp_path):
@@ -97,9 +104,15 @@ def test_export_yaml_is_parseable_and_carries_provenance(tmp_path):
     lab.evaluate(P)
     text = lab.export(P)["yaml"]
     doc = yaml.safe_load(text)
-    assert doc["entry"] == "d0_close" and doc["hold"] == 1 and doc["conditions"]["band_pos"] == [0.5, 1.5]
-    assert doc["trials_distinct"] == 1 and doc["design_external"] == ["band_pos"]
+    assert doc["entry"] == "d0_close" and doc["hold"] == 1 and doc["conditions"]["float_pct"] == [0.5, 1.5]
+    assert doc["trials_distinct"] == 1 and doc["design_external"] == []
     assert "train" in doc["evaluated_on"]
+
+
+def test_export_marks_the_d1_open_entry_as_design_external(tmp_path):
+    lab = make_lab(tmp_path)
+    doc = yaml.safe_load(lab.export({**P, "entry": "d1_open"})["yaml"])
+    assert doc["design_external"] == ["d1_open"]
 
 
 def test_trials_lists_history(tmp_path):
