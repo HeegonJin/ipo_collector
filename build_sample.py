@@ -229,12 +229,6 @@ def detected_listings(end: str, sample_start: str) -> list[dict]:
     return detect_listings(ksq, knx, sample_start.replace("-", ""))
 
 
-def excluded_listings(end: str, sample_start: str) -> dict:
-    """KRX 일별 데이터로 찾은 신규 종목 중 제외 사유가 있는 것 {종목코드: 사유} (스팩·리츠, 코넥스 이전상장).
-    DART 쪽 매매 대상에서 코넥스 이전상장을 빼는 데 쓴다 (D11)."""
-    return {r["code"]: r["excluded"] for r in detected_listings(end, sample_start) if r["excluded"]}
-
-
 def load_list_dd(base_date: str) -> dict:
     """KRX 종목기본정보 스냅샷 → {종목코드: 상장일}. 못 받으면 조용히 건너뛰지 않고 실패한다."""
     import krx_api
