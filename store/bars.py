@@ -31,6 +31,14 @@ def iter_filtered_bars(start: str, end: str, codes: set):
                        "close": num(r.get("TDD_CLSPRC")), "available_at": at}
 
 
+def iter_index_bars(start: str, end: str):
+    """코스닥 지수 일별 raw(kosdaq_idx)에서 '코스닥' 행만 bars 로 내보낸다. 파일이 없는 날(미수집·휴장)은 건너뛴다."""
+    for d in daterange(start, end):
+        p = config.RAW / "krx" / "kosdaq_idx" / f"{d}.json"
+        if p.exists():
+            yield from index_bars_from_krx_days({d: json.loads(p.read_text(encoding="utf-8"))})
+
+
 def last_seen_dates(start: str, end: str) -> tuple[dict, str | None]:
     """종목별 일별 데이터 마지막 등장일과 데이터의 마지막 거래일. 마지막 거래일보다 일찍 사라진 종목은
     상장폐지·이전 등으로 더는 거래되지 않는 것이다 (생존자 편향 점검)."""

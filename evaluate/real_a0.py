@@ -19,7 +19,7 @@ import report
 from core import settings
 from evaluate.backtest import run_a0
 from evaluate.outcomes import BarIndex
-from store.bars import calendar_bars, iter_filtered_bars
+from store.bars import calendar_bars, iter_filtered_bars, iter_index_bars
 from store.facts import facts_from_registry
 
 ROW_COLS = ["ipo_id", "short_code", "list_date", "offer_price", "entry_px", "exit_px", "gross_ret", "net_ret",
@@ -44,7 +44,9 @@ def _load(start, end):
     facts = facts_from_registry(mart / "dart_ipo_registry.csv", mart / "dart_offer_terms.csv")
     ipo_ids = sorted({f.ipo_id for f in facts if f.var == "listing_date"})
     codes = {f.value_text for f in facts if f.var == "short_code"}
-    bars = BarIndex(list(iter_filtered_bars(start, end, codes)) + calendar_bars(start, end))  # 민감도 실행까지 한 번만
+    # 종목 bars + 거래일 달력 + 코스닥 지수(기준선). 민감도 실행까지 색인을 한 번만 만든다
+    bars = BarIndex(list(iter_filtered_bars(start, end, codes)) + calendar_bars(start, end)
+                    + list(iter_index_bars(start, end)))
     years = sorted({int(f.value_text[:4]) for f in facts if f.var == "listing_date"}) or [2023]
     return facts, ipo_ids, bars, settings.load_costs(years[0], years[-1])
 
@@ -59,6 +61,10 @@ def _summaries(rows):
         "summary": net(usable), "summary_ex_limit_up": net(known_not_limit), "summary_unknown": net(unknown),
         "gross": report.summarize([r["gross_ret"] for r in usable]),
         "bench": report.summarize([r["bench_ret"] for r in usable]),
+        # 기준선·초과수익은 주 결과와 같은 표본(상한가 아님 확인 건)으로 맞춰 비교한다
+        "summary_bench": report.summarize([r["bench_ret"] for r in known_not_limit]),
+        "summary_excess": report.summarize([r["net_ret"] - r["bench_ret"] for r in known_not_limit
+                                            if r["bench_ret"] is not None]),
         "exit_issues": dict(collections.Counter(r["exit_kind"] for r in rows if r["exit_kind"] != "정상")),
         "summary_last_close": _with_fallback(rows, "net_ret_last_close"),
         "summary_wipeout": _with_fallback(rows, "net_ret_wipeout"),
@@ -93,11 +99,23 @@ def _write_csv(rows, start, end):
     return path
 
 
+def _benchmark_text(sm) -> str:
+    """코스닥 기준선과 D12 판정 문구. 지수 데이터가 없으면 계산 불가로 적는다. 유의성 검정은 하지 않았다."""
+    bench, excess, main = sm["summary_bench"], sm["summary_excess"], sm["summary_ex_limit_up"]
+    if not bench or not excess or not main:
+        return "계산 불가 — 코스닥 지수 데이터(kosdaq_dd_trd)가 없음 (미수집이거나 서비스 이용 권한 없음)"
+    p = report.pct
+    ok1, ok2 = main["mean"] > 0, excess["mean"] > 0
+    return (f"같은 날 코스닥 종가→익일 시가, 주 결과와 같은 표본 평균 {p(bench['mean'])} (n={bench['n']})\n"
+            f"- 종목별 초과수익(순수익 − 기준선) 평균 {p(excess['mean'])}, 중앙값 {p(excess['median'])} (n={excess['n']})\n"
+            f"- D12 판정: ① 기대값 > 0: {'예' if ok1 else '아니오'} ({p(main['mean'])}) · "
+            f"② 기준선 대비 우위: {'예' if ok2 else '아니오'} ({p(excess['mean'])})\n"
+            f"- 통계적 유의성(표준오차·부트스트랩)은 검정하지 않았다. 표본이 작아 평균 차이만으로 결론내리지 말 것.")
+
+
 def _render_doc(rows, sm, sensitivity, costs):
     dates = sorted(r["list_date"] for r in rows if r["list_date"])
-    bench = sm["bench"]
-    bench_text = ("계산 불가 — 코스닥 지수 서비스(kosdaq_dd_trd) 미승인으로 수집하지 못함" if not bench
-                  else f"평균 {report.pct(bench['mean'])} (n={bench['n']})")
+    bench_text = _benchmark_text(sm)
     sens = "\n".join(f"- 편도 {k * 100:.2f}%: {report.pct(v)}" for k, v in sensitivity.items()) or "- 설정 없음"
     issues = sm["exit_issues"]
     issues_text = ", ".join(f"{k} {v}건" for k, v in issues.items()) or "없음 (폐지/거래정지 0건)"
@@ -161,6 +179,7 @@ def run(end: str, start: str | None = None) -> dict:
     return {"rows": rows, "summary": sm["summary"], "summary_ex_limit_up": sm["summary_ex_limit_up"],
             "summary_unknown": sm["summary_unknown"], "exit_issues": sm["exit_issues"],
             "summary_last_close": sm["summary_last_close"], "summary_wipeout": sm["summary_wipeout"],
+            "summary_bench": sm["summary_bench"], "summary_excess": sm["summary_excess"],
             "sensitivity": sensitivity, "csv": str(out_csv), "doc": str(doc)}
 
 

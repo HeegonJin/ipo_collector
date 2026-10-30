@@ -42,6 +42,34 @@ def test_iter_filtered_bars_keeps_only_requested_codes(world):
     assert {x["short_code"] for x in bars} == {"A"} and [x["date"] for x in bars] == ["20230105", "20230106"]
 
 
+def test_iter_index_bars_reads_the_kosdaq_row_of_each_day(world):
+    from store.bars import INDEX_CODE, iter_index_bars
+    bars = list(iter_index_bars("20230103", "20230106"))
+    assert [b_["date"] for b_ in bars] == ["20230103", "20230104", "20230105", "20230106"]
+    assert {b_["short_code"] for b_ in bars} == {INDEX_CODE}
+    assert (bars[-1]["open"], bars[-1]["close"]) == (707.0, 710.0)
+
+
+def test_benchmark_and_excess_return_use_the_index_when_it_is_collected(world):
+    out = real_a0.run("20230106")
+    by = {r["ipo_id"]: r for r in out["rows"]}
+    assert by["A_ipo"]["bench_ret"] == pytest.approx(707 / 700 - 1)         # 0105 종가 → 0106 시가
+    assert out["summary_bench"]["n"] >= 1
+    # 초과수익은 주 결과와 같은 표본(상한가 아님 확인 건 = A) 의 종목별 (순수익 − 기준선)
+    assert out["summary_excess"]["n"] == 1
+    assert out["summary_excess"]["mean"] == pytest.approx(by["A_ipo"]["net_ret"] - (707 / 700 - 1))
+    text = Path(out["doc"]).read_text(encoding="utf-8")
+    assert "초과수익" in text and "D12" in text and "기대값 > 0" in text and "미승인" not in text
+
+
+def test_without_index_data_the_benchmark_is_not_computable_and_says_so(world):
+    import shutil
+    shutil.rmtree(config.RAW / "krx" / "kosdaq_idx")
+    out = real_a0.run("20230106")
+    assert out["summary_bench"] is None and out["summary_excess"] is None
+    assert "계산 불가" in Path(out["doc"]).read_text(encoding="utf-8")
+
+
 def test_last_seen_dates_finds_stocks_that_stop_appearing(world):
     import json
     from store.bars import last_seen_dates
