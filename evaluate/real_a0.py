@@ -12,11 +12,12 @@ import csv
 import statistics as st
 import sys
 from dataclasses import asdict
-from datetime import date
+from datetime import date, datetime
 
 import config
 import report
 from core import settings
+from evaluate import splits as splitlib
 from evaluate.backtest import run_a0
 from evaluate.outcomes import BarIndex
 from store.bars import calendar_bars, iter_filtered_bars, iter_index_bars
@@ -88,9 +89,9 @@ def _sensitivity(ipo_ids, facts, bars, costs):
     return out
 
 
-def _write_csv(rows, start, end):
+def _write_csv(rows, start, end, suffix=""):
     config.MART.mkdir(parents=True, exist_ok=True)
-    path = config.MART / f"a0_real_{start}_{end}.csv"
+    path = config.MART / f"a0_real{suffix}_{start}_{end}.csv"
     with open(path, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.DictWriter(f, fieldnames=ROW_COLS)
         w.writeheader()
@@ -113,7 +114,7 @@ def _benchmark_text(sm) -> str:
             f"- 통계적 유의성(표준오차·부트스트랩)은 검정하지 않았다. 표본이 작아 평균 차이만으로 결론내리지 말 것.")
 
 
-def _render_doc(rows, sm, sensitivity, costs):
+def _render_doc(rows, sm, sensitivity, costs, split_text="all"):
     dates = sorted(r["list_date"] for r in rows if r["list_date"])
     bench_text = _benchmark_text(sm)
     sens = "\n".join(f"- 편도 {k * 100:.2f}%: {report.pct(v)}" for k, v in sensitivity.items()) or "- 설정 없음"
@@ -128,7 +129,7 @@ def _render_doc(rows, sm, sensitivity, costs):
 - 기간: {dates[0] if dates else '-'} ~ {dates[-1] if dates else '-'} · 대상 {len(rows)}건 · 계산 가능 {len(sm['usable'])}건 · 계산 불가 {len(rows) - len(sm['usable'])}건
 - 출처: KRX Open API 코스닥 일별매매정보 (원본 `data/0_raw/krx`), DART 발행조건확정 공시 원문 (확정 공모가)
 - 이 문서는 **KRX statistical information** (한국거래소 통계정보)을 이용해 만들었다 (KRX OPEN API 약관 Art.10(3)). 원천 데이터는 비상업 목적으로만 쓰며 제3자에게 제공하지 않는다 (Art.6(2), Art.11(2)).
-- 학습/검증 분리: 이 결과는 기준값이 없는 기준선이라 분리하지 않음
+- 구간: {split_text}
 
 ## 비용·체결 가정
 - 수수료 편도 {costs['commission_per_side'] * 100:.3f}% · 슬리피지 편도 {costs['slippage_per_side'] * 100:.2f}% · 매도 거래세 연도별 {costs['kosdaq_sell_tax']}
@@ -166,25 +167,49 @@ def _render_doc(rows, sm, sensitivity, costs):
 """
 
 
-def run(end: str, start: str | None = None) -> dict:
+def _split_text(split: str, splits: dict, warning: str) -> str:
+    if split == "all":
+        return "all (구간을 나누지 않음 — 이 결과는 기준값이 없는 기준선이라 분리할 값이 없다)"
+    s, e = splitlib.window(split, splits)
+    text = f"{split} ({s}~{'계속' if e == '99991231' else e}, 상장일 기준)"
+    return f"{text} — 경고: {warning}" if warning else text
+
+
+def run(end: str, start: str | None = None, split: str = "all", splits: dict | None = None,
+        tag: str = "A0 실데이터") -> dict:
+    """split: train / valid / forward / all. valid 는 열 때마다 data/_meta/validation_runs.csv 에 기록하고 2번째부터 경고한다."""
     start = start or config.BUFFER_START
+    splits = splits or settings.load_splits()
+    opened = splitlib.open_split(split, config.META / "validation_runs.csv", tag, datetime.now())
     facts, ipo_ids, bars, costs = _load(start, end)
+    listed = {f.ipo_id: f.value_text for f in facts if f.var == "listing_date"}
+    ipo_ids = [i for i in ipo_ids if splitlib.in_split(listed[i], split, splits)]
     rows = _rows(run_a0(ipo_ids, facts, bars, costs))
     sm = _summaries(rows)
     sensitivity = _sensitivity(ipo_ids, facts, bars, costs)
-    out_csv = _write_csv(rows, start, end)
+    suffix = "" if split == "all" else f"_{split}"
+    out_csv = _write_csv(rows, start, end, suffix)
     out_dir = config.ROOT / "results"
     out_dir.mkdir(exist_ok=True)
-    doc = out_dir / f"{date.today()}_A0_real_v1.md"
-    doc.write_text(_render_doc(rows, sm, sensitivity, costs), encoding="utf-8")
+    doc = out_dir / f"{date.today()}_A0_real{suffix}_v1.md"
+    doc.write_text(_render_doc(rows, sm, sensitivity, costs, _split_text(split, splits, opened["warning"])),
+                   encoding="utf-8")
     return {"rows": rows, "summary": sm["summary"], "summary_ex_limit_up": sm["summary_ex_limit_up"],
             "summary_unknown": sm["summary_unknown"], "exit_issues": sm["exit_issues"],
             "summary_last_close": sm["summary_last_close"], "summary_wipeout": sm["summary_wipeout"],
             "summary_bench": sm["summary_bench"], "summary_excess": sm["summary_excess"],
-            "sensitivity": sensitivity, "csv": str(out_csv), "doc": str(doc)}
+            "sensitivity": sensitivity, "split": split, "split_warning": opened["warning"],
+            "csv": str(out_csv), "doc": str(doc)}
 
 
 if __name__ == "__main__":
-    end_arg = sys.argv[1] if len(sys.argv) > 1 else "20261026"
-    res = run(end_arg)
+    import argparse
+    ap = argparse.ArgumentParser(description="실데이터 A0 백테스트")
+    ap.add_argument("end", nargs="?", default="20261026")
+    ap.add_argument("--split", default="all", choices=splitlib.NAMES)
+    ap.add_argument("--tag", default="A0 실데이터")
+    a = ap.parse_args()
+    res = run(a.end, split=a.split, tag=a.tag)
+    if res["split_warning"]:
+        print(f"[경고] {res['split_warning']}")
     print(f"[A0] {res['csv']}\n[A0] {res['doc']}\n[A0] n={res['summary']['n'] if res['summary'] else 0}")

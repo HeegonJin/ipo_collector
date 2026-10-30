@@ -141,6 +141,33 @@ def test_delisted_stock_is_reported_and_sensitivities_include_it(world):
     assert "폐지/거래정지" in text and "전손" in text and "마지막 종가" in text
 
 
+SPL = {"train": {"start": "2023-01-01", "end": "2023-12-31"},
+       "valid": {"start": "2024-01-01", "end": "2024-12-31"},
+       "forward": {"start": "2025-01-01", "end": None}}
+
+
+def test_run_restricts_the_ipos_to_the_requested_split(world):
+    train = real_a0.run("20230106", split="train", splits=SPL)
+    assert {r["ipo_id"] for r in train["rows"]} == {"A_ipo", "LU_ipo"}          # 둘 다 2023-01-05 상장
+    assert "구간: train" in Path(train["doc"]).read_text(encoding="utf-8")
+    forward = real_a0.run("20230106", split="forward", splits=SPL)
+    assert forward["rows"] == [] and forward["summary"] is None                  # 해당 구간에 상장이 없어도 죽지 않는다
+
+
+def test_default_split_is_all_and_does_not_touch_the_validation_log(world):
+    out = real_a0.run("20230106", splits=SPL)
+    assert len(out["rows"]) == 2 and not (config.META / "validation_runs.csv").exists()
+
+
+def test_validation_split_is_logged_each_time_and_the_second_opening_warns(world):
+    first = real_a0.run("20230106", split="valid", splits=SPL)
+    second = real_a0.run("20230106", split="valid", splits=SPL)
+    assert first["split_warning"] == "" and "2번째" in second["split_warning"]
+    log = (config.META / "validation_runs.csv").read_text(encoding="utf-8-sig").strip().splitlines()
+    assert len(log) == 3                                                          # 머리글 + 2번 열람
+    assert "2번째" in Path(second["doc"]).read_text(encoding="utf-8")
+
+
 def test_result_doc_carries_the_krx_attribution_required_by_the_terms(world):
     """KRX OPEN API 약관 Art.10(3): 결과로 만든 페이지에는 "KRX statistical information" 을 명시해야 한다."""
     out = real_a0.run("20230106")
