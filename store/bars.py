@@ -28,6 +28,7 @@ def iter_filtered_bars(start: str, end: str, codes: set):
             code = short_code(r)
             if code in codes:
                 yield {"date": d, "short_code": code, "open": num(r.get("TDD_OPNPRC")),
+                       "high": num(r.get("TDD_HGPRC")), "low": num(r.get("TDD_LWPRC")),
                        "close": num(r.get("TDD_CLSPRC")), "available_at": at}
 
 

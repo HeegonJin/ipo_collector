@@ -33,5 +33,14 @@ def load_splits(config_dir: Path | None = None) -> dict:
     return splits
 
 
+def load_lab(config_dir: Path | None = None) -> dict:
+    """전략 실험 앱의 과적합 방지 장치 기준값 (최소 표본 수, 검증 구간 확인 문구, 시도 횟수 경고 기준)."""
+    lab = _load("lab_v1.yaml", config_dir)
+    for key in ("min_n", "confirm_phrase", "trials_warn_at"):
+        if key not in lab:
+            raise ValueError(f"lab_v1.yaml 에 {key} 가 없습니다")
+    return lab
+
+
 def load_universe(config_dir: Path | None = None) -> dict:
     return _load("universe_v1.yaml", config_dir)

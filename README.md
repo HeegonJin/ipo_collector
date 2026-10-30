@@ -31,10 +31,28 @@
 python krx_api.py 20261026                       # 1) KRX 일별 수집 (처음엔 수십 분, 이후엔 캐시)
 python dart_list.py 20230101 20261027            # 2) DART 지분증권 신고서 목록
 python build_dart_registry.py 20230101 20261027 20261026   # 3) 레지스트리 (data/2_mart/dart_ipo_registry.csv, dart_offer_terms.csv)
+python build_demand_mart.py 20230101 20261029    # 3') 수요 지표 마트 (data/2_mart/dart_demand.csv): 수요예측 경쟁률·확약·유통가능·락업 일정·일반청약 경쟁률
 python -m evaluate.real_a0 20261026              # 4) 실데이터 A0 결과 (results/*_A0_real_v1.md)
+python -m evaluate.real_a0 20261029 --split train   # 구간 지정 (train/valid/forward/all). valid 는 열 때마다 data/_meta/validation_runs.csv 에 기록, 2번째부터 경고
+python -m ops.paper_ledger settle 20261029       # 모의 장부(data/ledger/paper_a0.jsonl)의 청산일이 지난 매수 판단을 정산
+python -m lab.server 20261029                    # 전략 실험 앱 API (127.0.0.1:8765). 화면: cd lab/web && npm install && npm run build 후 같은 주소, 개발은 npm run dev (5173)
 python -m pytest -q                              # 테스트 (키 없이). tests/fixtures_real 은 로컬 전용이라 없으면 건너뛴다
 ```
 기존 흐름(`build_sample.py` → `dart_api.py` → `report.py`)도 그대로 동작한다.
+
+## 전략 실험 앱 (`lab/`)
+조건(공모가 밴드 위치·공모금액·상장일 값)·진입 시점(D0 종가/D1 시가)·보유(D+1/3/5)를 사람이 바꿔 보며 학습 구간(train)에서 비용 차감 후 수익률을 본다. 과적합 장치 4가지(`config/lab_v1.yaml`, 사람이 고정):
+최소 표본 수(미만이면 숫자 숨김) · 시도 횟수 카운터(`data/_meta/lab_trials.csv`, 우연 기대 최고 평균 표시) · 이웃 구간 견고성 · 검증 구간 잠금(확인 문구 + 학습에서 실행한 조건만, `validation_runs.csv` 기록).
+상장일 마감 후 값 + D0 종가 진입은 look-ahead 라 '상한 추정'으로, 설계도에 없는 조건은 '설계도 외 탐색'으로 화면에 표시한다. 조건 없음 + D0 종가 + D+1 = A0 기준선과 같아야 한다(train n=136, 평균 −0.11%).
+서버는 127.0.0.1 전용(Host/Origin 검사)이고 데이터를 밖으로 내보내지 않는다 (KRX 약관 Art.11(2)).
+
+## 수요 지표 수집 (`dart_demand.py`, `build_demand_mart.py`)
+설계도 M1(IPO 구조·수요)의 변수를 DART 원문 표에서 뽑는다 (전략 B·C 입력). 모두 상장 전에 공시되므로 `*_available_dt`(공시 접수일) 이후에는 look-ahead 없이 쓸 수 있다.
+- 발행조건확정(정정) 공시: 기관 수요예측 경쟁률·참여 건수, 확약 신청 수량(6개월·3개월·1개월·15일)과 확약률, 상장 직후 유통가능 물량, 락업 일정(상장 후 N개월에 풀리는 주식 수).
+- 증권발행실적보고서: 일반청약 경쟁률(청약 수량 ÷ 배정 수량), 기관 배정분의 확약기간별 최종 비중.
+- 묶음(수요예측·확약·유통가능/락업)마다 값이 있는 가장 늦은 상장 전 공시에서 가져오고 그 공시 번호(`*_rcept`)를 남긴다. 확약·유통가능 표가 최종 정정에는 없고 최초 신고서에만 있는 경우가 있다.
+- 교차 검증을 통과해야 `*_status`=확인 (표 열 개수, 수량÷경쟁률 ≤ 공모 주식, 확약+미확약=합계, 유통가능÷상장주식=문장 비율, 확약 비중 합=100%). 못 읽거나 불일치면 값은 남기되 `미확인`, 없으면 빈 칸 (0 으로 채우지 않는다).
+- 락업 일정은 문장에서 읽은 부분 합이라 `lockup_coverage`(= 읽은 합 ÷ 제한 총량)를 함께 둔다. 1.0 이면 `확인`. 예탁원(SEIBRO) 해제 일정은 쓰지 않았다 — 설계도가 대안으로 적은 '투자설명서·실적보고서 의무보유 표'로 대체. **실제 해제 후 매도 확인(투자자별 매매)은 수집하지 않는다.**
 
 ## 알아둘 사실 (실측)
 - KRX 일별 응답의 `ISU_CD` 는 6자리 단축코드(영문 섞임, 예 `0158S0`)이고 `ISU_SRT_CD` 필드는 없다. 휴장일도 `{"OutBlock_1": []}` 로 온다.

@@ -45,6 +45,17 @@ class BarIndex:
         i = bisect.bisect_right(self.calendar, d)
         return self.calendar[i] if i < len(self.calendar) else None
 
+    def prev_day(self, d: str):
+        i = bisect.bisect_left(self.calendar, d)
+        return self.calendar[i - 1] if i > 0 else None
+
+    def day_after(self, d: str, k: int):
+        """거래일 달력에서 d 로부터 k 거래일 뒤 (k=0 이면 d 자신). 달력 끝을 넘으면 None."""
+        i = bisect.bisect_left(self.calendar, d)
+        if i >= len(self.calendar) or self.calendar[i] != d:
+            return None
+        return self.calendar[i + k] if i + k < len(self.calendar) else None
+
 
 def _net(exit_px: float, c0: float, rates: tuple) -> float:
     fee, slip, tax = rates

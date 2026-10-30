@@ -5,3 +5,5 @@ __pycache__/
 .pytest_cache/
 *.pyc
 tests/fixtures_real/
+lab/web/node_modules/
+lab/web/dist/
