@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import Ops from "./Ops";
 import { api, Condition, EvalResult, Meta, Neighbor, Params, Stats, ValidResult } from "./api";
 
 const pct = (v: number | null | undefined, d = 2) => (v == null ? "-" : `${(v * 100).toFixed(d)}%`);
@@ -100,6 +101,7 @@ function Robustness({ r }: { r: EvalResult["robustness"] }) {
 }
 
 export default function App() {
+  const [tab, setTab] = useState<"lab" | "ops">("lab");
   const [meta, setMeta] = useState<Meta | null>(null);
   const [params, setParams] = useState<Params | null>(null);
   const [count, setCount] = useState<number | null>(null);
@@ -148,10 +150,19 @@ export default function App() {
   };
   const tooFew = count != null && count < meta.min_n;
 
+  const tabs = (
+    <nav className="tabs" role="tablist">
+      <button role="tab" aria-selected={tab === "lab"} className={tab === "lab" ? "active" : ""} onClick={() => setTab("lab")}>전략 실험</button>
+      <button role="tab" aria-selected={tab === "ops"} className={tab === "ops" ? "active" : ""} onClick={() => setTab("ops")}>모의 운영</button>
+    </nav>
+  );
+  if (tab === "ops") return <main><h1>IPO 전략 실험실</h1>{tabs}<Ops /></main>;
+
   return (
     <main>
       <header>
         <h1>IPO 전략 실험실</h1>
+        {tabs}
         <p className="muted">학습 구간 {meta.split_sizes.train}종목 · 검증 구간 {meta.split_sizes.valid}종목은 잠겨 있습니다 · 모의투자 전용, 비용 차감 후 수익률</p>
       </header>
       {error && <p className="err" role="alert">{error}</p>}

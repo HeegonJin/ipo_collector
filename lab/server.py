@@ -23,6 +23,7 @@ from evaluate.basic_stats import offer_size_bil
 from evaluate.outcomes import BarIndex
 from lab import engine, guards
 from lab.dataset import build_rows
+from lab.ops_api import Ops
 from store.bars import calendar_bars, iter_filtered_bars, iter_index_bars
 
 PORT = 8765
@@ -137,13 +138,17 @@ def _host_ok(value: str | None) -> bool:
     return host in LOCAL_HOSTS
 
 
-def make_server(lab: Lab, port: int = PORT) -> ThreadingHTTPServer:
-    get_routes = {"/api/meta": lambda: lab.meta(), "/api/trials": lambda: lab.trials_view()}
+def make_server(lab: Lab, port: int = PORT, ops: Ops | None = None) -> ThreadingHTTPServer:
+    ops = ops or Ops()
+    get_routes = {"/api/meta": lambda: lab.meta(), "/api/trials": lambda: lab.trials_view(),
+                  "/api/ops/schedule": lambda: ops.schedule_view(), "/api/ops/ledger": lambda: ops.ledger_view()}
     post_routes = {
         "/api/count": lambda b: lab.count(b["params"]),
         "/api/evaluate": lambda b: lab.evaluate(b["params"]),
         "/api/validate": lambda b: lab.validate(b["params"], b.get("confirm", "")),
         "/api/export": lambda b: lab.export(b["params"]),
+        "/api/ops/schedule/add": lambda b: ops.schedule_add(b),
+        "/api/ops/run": lambda b: ops.run(b),
     }
 
     class Handler(BaseHTTPRequestHandler):
@@ -200,7 +205,9 @@ def make_server(lab: Lab, port: int = PORT) -> ThreadingHTTPServer:
                 self._send(200, post_routes[path](body))
             except PermissionError as e:
                 self._send(403, {"error": str(e)})
-            except (ValueError, KeyError, TypeError, AttributeError) as e:
+            except SystemExit as e:           # daily_job 이 선행 조건 부족을 SystemExit 메시지로 알린다
+                self._send(409, {"error": str(e)})
+            except (ValueError, KeyError, TypeError, AttributeError, TimeoutError) as e:
                 self._send(400, {"error": f"잘못된 요청: {e}"})
 
         def _static(self, path: str):

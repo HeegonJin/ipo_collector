@@ -45,3 +45,10 @@ th { color: var(--muted); font-weight: 500; }
 .hist { width: 100%; max-width: 620px; } .bar-pos { fill: var(--pos); } .bar-neg { fill: var(--neg); } .zero { stroke: var(--muted); stroke-dasharray: 3 3; } .axis { fill: var(--muted); font-size: 11px; }
 .valid-row { display: flex; gap: 8px; flex-wrap: wrap; } .valid-row input { flex: 1; min-width: 200px; padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; }
 pre { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow: auto; }
+
+.tabs { display: flex; gap: 6px; margin: 10px 0 14px; } .tabs button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.ops { display: grid; gap: 16px; } .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+.panel h2 { margin-top: 0; }
+.form-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 8px 0; }
+.form-row input:not([type=checkbox]) { padding: 7px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--text); font: inherit; min-width: 130px; }
+.jobs { display: grid; gap: 6px; margin: 8px 0; } .job { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }

@@ -44,3 +44,25 @@ export const api = {
   validate: (params: Params, confirm: string) => request<ValidResult>("/api/validate", { params, confirm }),
   exportYaml: (params: Params) => request<{ yaml: string }>("/api/export", { params }),
 };
+
+export type ScheduleEntry = {
+  list_date: string; corp_name: string; stock_code: string; offer_price: number | null; entered_at: string; ipo_id: string | null;
+};
+export type LedgerItem = {
+  as_of: string; strategy: string; ipo_id: string; short_code: string | null; action: string; reasons: string[];
+  valid: boolean; invalid_reason: string | null; settled: boolean; net_ret: number | null;
+  exit_kind: string | null; exit_reason: string | null; exit_date: string | null;
+};
+export type ReportRow = { strategy: string; name: string; action: string; reasons: string[]; recorded: boolean; late?: boolean };
+export type RunResult = {
+  cmd: string; report?: ReportRow[];
+  result?: { settled: number; problems: string[]; missing_bars: string[] };
+};
+
+export const opsApi = {
+  schedule: () => request<{ entries: ScheduleEntry[]; registry_error: string }>("/api/ops/schedule"),
+  addSchedule: (b: { list_date: string; corp_name: string; stock_code: string; offer_price?: string }) =>
+    request<{ entry: ScheduleEntry; late: boolean }>("/api/ops/schedule/add", b),
+  ledger: () => request<{ items: LedgerItem[]; problems: string[]; rows: number }>("/api/ops/ledger"),
+  run: (cmd: string, day: string, allow_stale = false) => request<RunResult>("/api/ops/run", { cmd, day, allow_stale }),
+};

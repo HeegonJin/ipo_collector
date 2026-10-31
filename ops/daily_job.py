@@ -146,6 +146,12 @@ def missing_listing_bars(ledger: Ledger, end: str) -> list[str]:
     return [f"{r['short_code']} ({r['listing_date']})" for r in buys if (r["short_code"], r["listing_date"]) not in have]
 
 
+def run_settle(day: str, wallclock: datetime | None = None) -> dict:
+    led = Ledger(LEDGER_PATH)
+    n = settle_from_raw(led, day, wallclock or datetime.now(KST))
+    return {"settled": n, "problems": led.verify(), "missing_bars": missing_listing_bars(led, day)}
+
+
 def print_report(rows: list[dict]) -> None:
     if not rows:
         print("대상 없음")
@@ -169,12 +175,10 @@ def main(argv=None) -> int:
     elif cmd == "swing":
         print_report(run_swing(day, "--allow-stale" in argv))
     else:
-        led = Ledger(LEDGER_PATH)
-        n = settle_from_raw(led, day, datetime.now(KST))
-        print(f"[장부] 정산 {n}건 추가, 무결성 문제 {led.verify() or '없음'}")
-        bad = missing_listing_bars(led, day)
-        if bad:
-            print(f"[경고] 상장일 시세가 없는 A0 매수 종목(종목코드 입력 오류 의심): {', '.join(bad)}")
+        res = run_settle(day)
+        print(f"[장부] 정산 {res['settled']}건 추가, 무결성 문제 {res['problems'] or '없음'}")
+        if res["missing_bars"]:
+            print(f"[경고] 상장일 시세가 없는 A0 매수 종목(종목코드 입력 오류 의심): {', '.join(res['missing_bars'])}")
     return 0
 
 
