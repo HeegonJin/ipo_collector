@@ -19,7 +19,7 @@ from core.schema import Status
 
 NO = Status.UNVERIFIED.value
 DEMAND_COLS = (
-    ["ipo_id", "corp_code", "stock_code", "corp_name", "list_dd",
+    ["ipo_id", "corp_code", "stock_code", "corp_name", "list_dd", "pre_sample",
      "demand_rcept", "demand_available_dt", "demand_n", "demand_qty", "demand_ratio", "demand_status", "demand_note",
      "commit_rcept", "commit_available_dt", "commit_ratio", "commit_6m_qty", "commit_3m_qty", "commit_1m_qty", "commit_15d_qty",
      "commit_status", "commit_note",
@@ -92,7 +92,7 @@ def collect_ipo(reg: dict, terms: list[dict], reports: list[dict]) -> dict:
     pct = a["final_commit_pct"] or {}
     lockups = d["lockups"] or {}
     coverage = sum(lockups.values()) / d["locked_total"] if lockups and d["locked_total"] else None
-    row = {k: reg.get(k, "") for k in ("ipo_id", "corp_code", "stock_code", "corp_name", "list_dd")}
+    row = {k: reg.get(k, "") for k in ("ipo_id", "corp_code", "stock_code", "corp_name", "list_dd", "pre_sample")}
     row.update({k: d[k] for k in ("demand_rcept", "demand_available_dt", "demand_n", "demand_qty", "demand_ratio", "demand_status",
                                   "demand_note", "commit_rcept", "commit_available_dt", "commit_ratio", "commit_status", "commit_note",
                                   "float_rcept", "float_available_dt", "float_shares", "float_pct", "listed_shares", "float_status",
@@ -122,7 +122,7 @@ def _read(name: str) -> list[dict]:
 
 
 def build(start: str, end: str) -> list[dict]:
-    registry = [r for r in _read("dart_ipo_registry.csv") if r["in_trading_universe"] == "True" and r["list_dd"]]
+    registry = [r for r in _read("dart_ipo_registry.csv") if (r["in_trading_universe"] == "True" or r.get("pre_sample") == "True") and r["list_dd"]]
     terms: dict = {}
     for t in _read("dart_offer_terms.csv"):
         terms.setdefault(t["ipo_id"], []).append(t)

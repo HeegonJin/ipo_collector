@@ -259,3 +259,10 @@ def test_listing_window():
     assert b.listed_within_window("20260911", "20260101") is False   # 신고보다 먼저 상장 → 기존 상장사
     assert b.listed_within_window("20250101", "20261023") is False   # 400일 초과
     assert b.listed_within_window("20260911", "") is False
+
+
+def test_pre_sample_marks_only_listings_between_buffer_start_and_sample_start():
+    note = "표본 시작일 이전 상장"
+    assert b.is_pre_sample(note, "20230315", "20230101") is True
+    assert b.is_pre_sample(note, "20221215", "20230101") is False     # 시세가 없는 구간
+    assert b.is_pre_sample("", "20230315", "20230101") is False       # 다른 사유로 제외된 종목

@@ -31,7 +31,7 @@ from core.ids import make_ipo_id
 from core.schema import Status
 
 REGISTRY_COLS = ["ipo_id", "corp_code", "stock_code", "corp_name", "first_rcept_no", "first_rcept_dt", "sale_method",
-                 "is_ipo_candidate", "list_dd", "list_dd_source", "in_trading_universe", "universe_note", "last_seen",
+                 "is_ipo_candidate", "list_dd", "list_dd_source", "in_trading_universe", "pre_sample", "universe_note", "last_seen",
                  "delisted_after_listing", "n_filings", "last_kind",
                  "offer_price_final", "offer_price_status", "offer_price_crosscheck", "offer_price_rcept",
                  "offer_price_available_dt", "band_low", "band_high", "offer_price_note"]
@@ -134,6 +134,15 @@ def _final_price(filings: list[dict], universe: bool, corp_reports: list[dict], 
     return dart_terms.reconcile(final, result)
 
 
+PRE_SAMPLE_NOTE = "표본 시작일 이전 상장"
+
+
+def is_pre_sample(note: str, list_dd: str, buffer_start: str) -> bool:
+    """표본 시작일(2023-07-01) 전, 일별 시세가 있는 구간(buffer_start 이후)에 상장한 종목. 참고용으로 데이터에는 넣되
+    매매 대상(in_trading_universe)이 아니어서 학습·검증·모의 운영 어디에도 섞이지 않는다."""
+    return note == PRE_SAMPLE_NOTE and list_dd >= buffer_start
+
+
 def universe_decision(last_pre_listing_dt: str | None, list_dd: str, sample_start: str, exclude_reason: str | None):
     """매매 대상 여부와 이유. last_pre_listing_dt 는 상장일 이전 마지막 지분증권 신고일(없으면 None).
     표본 시작일 이전 상장, 코넥스 이전상장(D11)은 제외한다. 상장 전 신고가 없으면(합병·이전상장 등 공모 없는 상장,
@@ -147,11 +156,11 @@ def universe_decision(last_pre_listing_dt: str | None, list_dd: str, sample_star
     if not listed_within_window(last_pre_listing_dt, list_dd):
         return False, "상장 전 마지막 신고가 400일 초과"
     if list_dd < sample_start:
-        return False, "표본 시작일 이전 상장"
+        return False, PRE_SAMPLE_NOTE
     return True, ""
 
 
-def _registry_row(ipo_id, corp, filings, estk, listing, final, universe, note="", seen=("", False)) -> dict:
+def _registry_row(ipo_id, corp, filings, estk, listing, final, universe, note="", seen=("", False), pre_sample=False) -> dict:
     first = filings[0]
     sale_method = next((x.get("sale_method") for x in estk.values() if x.get("sale_method")), "")
     stock, list_dd, *src = listing
@@ -160,7 +169,7 @@ def _registry_row(ipo_id, corp, filings, estk, listing, final, universe, note=""
         "ipo_id": ipo_id, "corp_code": corp, "stock_code": stock, "corp_name": first["corp_name"],
         "first_rcept_no": first["rcept_no"], "first_rcept_dt": first["rcept_dt"], "sale_method": sale_method,
         "is_ipo_candidate": sale_method == "일반공모", "list_dd": list_dd, "list_dd_source": src[0] if src else "",
-        "in_trading_universe": universe, "universe_note": note, "last_seen": last_seen,
+        "in_trading_universe": universe, "pre_sample": pre_sample, "universe_note": note, "last_seen": last_seen,
         "delisted_after_listing": delisted, "n_filings": len(filings), "last_kind": filings[-1]["kind"],
         "offer_price_final": final["offer_price"], "offer_price_status": final["status"],
         "offer_price_crosscheck": final.get("crosscheck", "미실시"),
@@ -194,6 +203,7 @@ def build(start: str, end: str, base_date: str, exclude: dict | None = None, sam
     detected: {종목코드: 상장일} KRX 탐지 신규상장 — 상장폐지된 종목의 상장일을 과거 스냅샷에서 찾는 데 쓴다.
     last_seen/last_day: 일별 데이터 마지막 등장일 — 상장 뒤 사라진 종목(delisted_after_listing)을 표시한다."""
     sample_start = sample_start or settings.load_universe()["sample_start"].replace("-", "")
+    buffer_start = settings.load_universe()["buffer_start"].replace("-", "")
     exclude, last_seen = exclude or {}, last_seen or {}
     by_corp = defaultdict(list)
     for r in dart_list.equity_registrations(start, end):
@@ -209,10 +219,11 @@ def build(start: str, end: str, base_date: str, exclude: dict | None = None, sam
         pre_dates = [f["rcept_dt"] for f in filings if corp_listing[1] and f["rcept_dt"] <= corp_listing[1]]
         universe, note = universe_decision(max(pre_dates) if pre_dates else None, corp_listing[1], sample_start,
                                            exclude.get(corp_listing[0]))
-        final = _final_price(filings, universe, result_reports.get(corp, []), corp_listing[1])
+        pre_sample = is_pre_sample(note, corp_listing[1], buffer_start)
+        final = _final_price(filings, universe or pre_sample, result_reports.get(corp, []), corp_listing[1])
         seen = last_seen.get(corp_listing[0], "")
         delisted = bool(seen and last_day and seen < last_day)
-        registry.append(_registry_row(ipo_id, corp, filings, estk, corp_listing, final, universe, note, (seen, delisted)))
+        registry.append(_registry_row(ipo_id, corp, filings, estk, corp_listing, final, universe, note, (seen, delisted), pre_sample))
         terms += _terms_rows(ipo_id, filings, estk, final)
     return registry, terms
 
@@ -247,5 +258,5 @@ if __name__ == "__main__":
           f"대상 중 상장 뒤 사라진 종목 {sum(bool(r['delisted_after_listing']) for r in reg if r['in_trading_universe'])}건)")
     uni = [r for r in reg if r["in_trading_universe"]]
     ok = [r for r in uni if r["offer_price_status"] == Status.CONFIRMED.value]
-    print(f"[DART] {write(reg, REGISTRY_COLS, 'dart_ipo_registry.csv')} ({len(reg)}곳, IPO 후보 {sum(r['is_ipo_candidate'] for r in reg)}, 매매 대상 {len(uni)}, 확정 공모가 확인 {len(ok)})")
+    print(f"[DART] {write(reg, REGISTRY_COLS, 'dart_ipo_registry.csv')} ({len(reg)}곳, IPO 후보 {sum(r['is_ipo_candidate'] for r in reg)}, 매매 대상 {len(uni)}, 표본 이전(참고용) {sum(bool(r['pre_sample']) for r in reg)}, 확정 공모가 확인 {len(ok)})")
     print(f"[DART] {write(terms, TERMS_COLS, 'dart_offer_terms.csv')} ({len(terms)}건)")
