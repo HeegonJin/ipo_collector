@@ -58,3 +58,11 @@ def load_strategy(name: str, config_dir: Path | None = None) -> dict:
 
 def load_universe(config_dir: Path | None = None) -> dict:
     return _load("universe_v1.yaml", config_dir)
+
+
+def load_risk(config_dir: Path | None = None) -> dict:
+    cfg = _load("risk_v1.yaml", config_dir)
+    for key in ("paper_capital_krw", "weight_per_trade", "max_weight_per_day", "min_weight", "max_participation", "limit_up_pct"):
+        if key not in cfg:
+            raise ValueError(f"risk_v1.yaml 에 {key} 가 없습니다")
+    return cfg

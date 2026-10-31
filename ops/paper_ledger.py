@@ -39,7 +39,7 @@ def record_unmapped(ledger: Ledger, unmapped: list[dict], as_of: datetime, wallc
 def decision_from_row(row: dict) -> Decision:
     return Decision(row["ipo_id"], row["strategy"], datetime.fromisoformat(row["as_of"]), row["action"],
                     row["entry_rule"], row["exit_rule"], tuple(row["reasons"]), row["short_code"],
-                    row["listing_date"], row["offer_price"])
+                    row["listing_date"], row["offer_price"], row.get("weight"))
 
 
 def settle_due(ledger: Ledger, index: BarIndex, costs: dict, settled_at: datetime) -> int:

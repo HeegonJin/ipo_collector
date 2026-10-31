@@ -61,7 +61,7 @@ class Ops:
                           "action": r["action"], "reasons": r["reasons"], "valid": r["valid"], "invalid_reason": r["invalid_reason"],
                           "settled": s is not None, "net_ret": s.get("net_ret") if s else None,
                           "exit_kind": s.get("exit_kind") if s else None, "exit_reason": s.get("exit_reason") if s else None,
-                          "exit_date": s.get("exit_date") if s else None})
+                          "exit_date": s.get("exit_date") if s else None, "weight": r.get("weight")})
         items.reverse()
         return {"items": items, "problems": led.verify(), "rows": len(rows)}
 

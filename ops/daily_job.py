@@ -17,6 +17,7 @@ import config
 from core import settings
 from core.pit import PitReader
 from core.tradingcal import KST
+from decide import risk
 from decide.runner import Decision, run_decision_point
 from ledger.ledger import Ledger
 from ops import schedule
@@ -52,14 +53,25 @@ def decide_a0(day: str, entries: list, registry_rows: list[dict], ledger: Ledger
         ipo_ids.append(row["ipo_id"])
         names[row["ipo_id"]] = e.corp_name
         facts += schedule.facts_for(e, row["ipo_id"], row)
-    decisions = run_decision_point(as_of, ipo_ids, facts, [])
+    decisions = _gate(run_decision_point(as_of, ipo_ids, facts, []), PitReader([], [], as_of), ledger, as_of)
     record_decisions(ledger, decisions, wallclock)
     record_unmapped(ledger, unmapped, as_of, wallclock)
     late = wallclock > as_of + timedelta(minutes=5)
     for d in decisions:
         report.append({"strategy": d.strategy, "name": names[d.ipo_id], "action": d.action, "reasons": list(d.reasons),
-                       "recorded": d.action == "매수", "late": late and d.action == "매수"})
+                       "recorded": d.action == "매수", "late": late and d.action == "매수", "weight": d.weight})
     return report
+
+
+def weights_used(ledger: Ledger, as_of: datetime) -> float:
+    """같은 날(KST) 이미 기록된 유효한 매수 판단의 비중 합계 (리스크 게이트의 같은 날 합산 한도에 쓴다)."""
+    day = as_of.astimezone(KST).date()
+    return sum((r.get("weight") or 0.0) for r in ledger.rows() if r["type"] == "decision" and r["action"] == "매수" and r["valid"]
+               and datetime.fromisoformat(r["as_of"]).astimezone(KST).date() == day)
+
+
+def _gate(decisions: list[Decision], reader: PitReader, ledger: Ledger, as_of: datetime) -> list[Decision]:
+    return risk.apply(decisions, reader, settings.load_risk(), weights_used(ledger, as_of))
 
 
 def _buys_so_far(ledger: Ledger) -> set:
@@ -83,7 +95,7 @@ def decide_swing(day: str, universe: list[dict], facts: list, bars: list[dict], 
     for f in facts:
         facts_by_ipo.setdefault(f.ipo_id, []).append(f)
     done = _buys_so_far(ledger)
-    report, decisions = [], []
+    report, decisions, pending = [], [], []
     for row in universe:
         if not row["list_dd"] or row["list_dd"] >= day:
             continue
@@ -100,7 +112,11 @@ def decide_swing(day: str, universe: list[dict], facts: list, bars: list[dict], 
             else:
                 decisions.append(Decision(row["ipo_id"], module.NAME, as_of, "매수", "next_open", module.NAME, sig.reasons,
                                           sig.short_code, sig.listing_date, sig.offer_price))
+                pending.append(item)
             report.append(item)
+    decisions = _gate(decisions, PitReader([], bars, as_of), ledger, as_of)
+    for item, d in zip(pending, decisions):                      # 게이트가 막은 건은 기록하지 않고 이유를 보여 준다
+        item["reasons"], item["action"], item["recorded"], item["weight"] = list(d.reasons), d.action, d.action == "매수", d.weight
     record_decisions(ledger, decisions, wallclock)
     return report
 
@@ -113,7 +129,7 @@ def previous_weekday(day: str) -> str:
     return d.strftime("%Y%m%d")
 
 
-def run_swing(day: str, allow_stale: bool = False, wallclock: datetime | None = None) -> list[dict]:
+def run_swing(day: str, allow_stale: bool = False, wallclock: datetime | None = None, ledger_path=None) -> list[dict]:
     prev = previous_weekday(day)
     if not allow_stale and not (config.RAW / "krx" / "ksq_daily" / f"{prev}.json").exists():
         raise SystemExit(f"전 거래일({prev}) KRX 일별 자료가 없습니다. 먼저 python krx_api.py {prev} 를 실행하세요 "
@@ -128,11 +144,12 @@ def run_swing(day: str, allow_stale: bool = False, wallclock: datetime | None = 
     bars = list(iter_filtered_bars(start, end, codes)) + list(iter_index_bars(start, end))
     facts = facts_from_registry(mart / "dart_ipo_registry.csv", mart / "dart_offer_terms.csv") + \
         facts_from_demand_mart(mart / "dart_demand.csv")
-    return decide_swing(day, universe, facts, bars, Ledger(LEDGER_PATH), wallclock or datetime.now(KST))
+    return decide_swing(day, universe, facts, bars, Ledger(ledger_path or LEDGER_PATH), wallclock or datetime.now(KST))
 
 
-def run_a0(day: str, wallclock: datetime | None = None) -> list[dict]:
-    return decide_a0(day, schedule.load(), schedule.registry_rows(), Ledger(LEDGER_PATH), wallclock or datetime.now(KST))
+def run_a0(day: str, wallclock: datetime | None = None, ledger_path=None, schedule_path=None) -> list[dict]:
+    return decide_a0(day, schedule.load(schedule_path or schedule.PATH), schedule.registry_rows(), Ledger(ledger_path or LEDGER_PATH),
+                     wallclock or datetime.now(KST))
 
 
 def missing_listing_bars(ledger: Ledger, end: str) -> list[str]:
@@ -146,8 +163,8 @@ def missing_listing_bars(ledger: Ledger, end: str) -> list[str]:
     return [f"{r['short_code']} ({r['listing_date']})" for r in buys if (r["short_code"], r["listing_date"]) not in have]
 
 
-def run_settle(day: str, wallclock: datetime | None = None) -> dict:
-    led = Ledger(LEDGER_PATH)
+def run_settle(day: str, wallclock: datetime | None = None, ledger_path=None) -> dict:
+    led = Ledger(ledger_path or LEDGER_PATH)
     n = settle_from_raw(led, day, wallclock or datetime.now(KST))
     return {"settled": n, "problems": led.verify(), "missing_bars": missing_listing_bars(led, day)}
 
@@ -157,7 +174,8 @@ def print_report(rows: list[dict]) -> None:
         print("대상 없음")
     for r in rows:
         mark = "기록" if r["recorded"] else "미기록"
-        print(f"[{r['strategy']}] {r['name']}: {r['action']} ({mark}) — {'; '.join(r['reasons'])}")
+        w = f" 비중 {r['weight']:.1%}" if r.get("weight") else ""
+        print(f"[{r['strategy']}] {r['name']}: {r['action']}{w} ({mark}) — {'; '.join(r['reasons'])}")
         if r.get("late"):
             print("    [경고] 판단 시각 +5분 뒤에 기록돼 장부에서 무효(valid=false)로 남았습니다.")
 

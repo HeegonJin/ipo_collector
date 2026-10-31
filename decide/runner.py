@@ -22,6 +22,7 @@ class Decision:
     short_code: str | None
     listing_date: str | None
     offer_price: float | None
+    weight: float | None = None      # L6 리스크 게이트가 정한 비중 (운용금 대비). A0 처럼 게이트를 거치지 않으면 None
 
 
 def run_decision_point(as_of: datetime, ipo_ids: list[str], facts: list[Fact], bars: list[dict]) -> list[Decision]:

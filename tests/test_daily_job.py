@@ -88,7 +88,7 @@ def next_weekday(d):
 
 def swing_setup():
     ds, idx = b_market(60)
-    stock = [bar(d, 9000) for d in ds]
+    stock = [bar(d, 9000, volume=10_000_000) for d in ds]        # 거래대금이 충분해야 리스크 게이트가 통과시킨다
     universe = [{"ipo_id": "I1", "list_dd": LISTING, "stock_code": "ABC", "corp_name": "실패공모"}]
     return next_weekday(ds[-1]), universe, facts(demand=120), stock + idx
 
@@ -100,6 +100,7 @@ def test_swing_records_b_once_and_never_twice(ledger):
     assert [(r["strategy"], r["recorded"]) for r in rep] == [("B_v1", True)]
     row = ledger.rows()[0]
     assert (row["strategy"], row["entry_rule"], row["exit_rule"], row["valid"]) == ("B_v1", "next_open", "B_v1", True)
+    assert row["weight"] == 0.10 and rep[0]["weight"] == 0.10
     again = daily_job.decide_swing(day, universe, fs, bars, ledger, wall)
     assert again[0]["recorded"] is False and len(ledger.rows()) == 1
 
@@ -118,3 +119,11 @@ def test_swing_refuses_stale_krx_data(tmp_path, monkeypatch):
 
 def test_previous_weekday_skips_weekend():
     assert daily_job.previous_weekday("20261116") == "20261113" and daily_job.previous_weekday("20261117") == "20261116"
+
+
+def test_swing_gate_blocks_thin_trading_and_reports_why(ledger):
+    day, universe, fs, bars = swing_setup()
+    thin = [{**b, "volume": 1000} if b["short_code"] == "ABC" else b for b in bars]
+    rep = daily_job.decide_swing(day, universe, fs, thin, ledger, daily_job.swing_as_of(day))
+    assert rep[0]["action"] == "관망" and rep[0]["recorded"] is False and "리스크 게이트" in rep[0]["reasons"][-1]
+    assert ledger.rows() == []
