@@ -14,3 +14,4 @@ share/d-*/
 lab/web/public/lab_data.json
 lab/web/dist-static/
 share/lab-*/
+results/daily/

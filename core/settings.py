@@ -1,4 +1,5 @@
 """config/*.yaml 로더. 필요한 값이 빠져 있으면 조용히 None 을 내지 않고 바로 실패한다."""
+import hashlib
 from datetime import date
 from pathlib import Path
 
@@ -66,3 +67,11 @@ def load_risk(config_dir: Path | None = None) -> dict:
         if key not in cfg:
             raise ValueError(f"risk_v1.yaml 에 {key} 가 없습니다")
     return cfg
+
+
+def config_hash(config_dir: Path | None = None) -> str:
+    """config/*.yaml 전체의 짧은 해시. 장부의 판단 행에 남겨, 어떤 설정(숫자)으로 판단했는지 사후에 대조한다."""
+    h = hashlib.sha256()
+    for path in sorted((config_dir or CONFIG_DIR).glob("*.yaml")):
+        h.update(path.name.encode() + b"\0" + path.read_bytes() + b"\0")
+    return h.hexdigest()[:16]

@@ -20,6 +20,8 @@ from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from core import settings
+
 GENESIS = "GENESIS"
 LATE_AFTER = timedelta(minutes=5)
 LOCK_POLL_SEC = 0.01
@@ -84,6 +86,7 @@ class Ledger:
             fields = asdict(d)
             fields["as_of"] = d.as_of.isoformat()
             fields["reasons"] = list(d.reasons)
+            fields["config_hash"] = settings.config_hash()
             self._append({"type": "decision", "ledger_id": ledger_id, **fields,
                           "decided_at_wallclock": wallclock.isoformat(), "valid": not late,
                           "invalid_reason": "판단 시각(as_of) + 5분 초과 기록" if late else None})
