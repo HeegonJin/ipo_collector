@@ -8,3 +8,4 @@ tests/fixtures_real/
 lab/web/node_modules/
 lab/web/dist/
 .netlify/
+.claude/skills/impeccable/scripts/bin/
