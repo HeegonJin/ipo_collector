@@ -69,6 +69,14 @@ def load_risk(config_dir: Path | None = None) -> dict:
     return cfg
 
 
+def load_sector_map(config_dir: Path | None = None) -> dict:
+    cfg = _load("sector_map_v1.yaml", config_dir)
+    for key in ("map", "fallback_manufacturing", "fallback_other"):
+        if key not in cfg:
+            raise ValueError(f"sector_map_v1.yaml 에 {key} 가 없습니다")
+    return cfg
+
+
 def config_hash(config_dir: Path | None = None) -> str:
     """config/*.yaml 전체의 짧은 해시. 장부의 판단 행에 남겨, 어떤 설정(숫자)으로 판단했는지 사후에 대조한다."""
     h = hashlib.sha256()

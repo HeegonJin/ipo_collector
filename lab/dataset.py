@@ -48,11 +48,15 @@ def _demand_features(d: dict) -> dict:
     }
 
 
+EXTRA_KEYS = ("ipo_heat_ret5", "ipo_heat_cnt30", "idx_ret20", "idx_ret60", "idx_dd60", "idx_vol20",
+              "sector_ret20", "sector_rel20", "secondary_pct")
+
+
 def build_rows(universe: list[dict], index: BarIndex, splits: dict, demand: dict | None = None,
-               sizes: dict | None = None) -> list[dict]:
+               sizes: dict | None = None, extra: dict | None = None) -> list[dict]:
     """universe: 레지스트리 CSV 행(매매 대상), demand: {ipo_id: 수요 마트 행} (data/2_mart/dart_demand.csv),
     sizes: {ipo_id: 공모 규모(억원)} (모르면 키 없음 → None). 상장일 시세가 없는 종목은 건너뛴다."""
-    demand, sizes = demand or {}, sizes or {}
+    demand, sizes, extra = demand or {}, sizes or {}, extra or {}
     idx = index.code(INDEX_CODE)
     rows = []
     for r in universe:
@@ -68,11 +72,18 @@ def build_rows(universe: list[dict], index: BarIndex, splits: dict, demand: dict
             day = index.day_after(d0, k)
             open_d[k] = bars[day]["open"] if day in bars else None
         c0, h0 = b0["close"], b0.get("high")
+        dem = _demand_features(demand.get(r["ipo_id"], {}))
+        listed = _confirmed(demand.get(r["ipo_id"], {}), "float_status", _f(demand.get(r["ipo_id"], {}).get("listed_shares")))
+        float_sh = listed * dem["float_pct"] / 100 if listed and dem["float_pct"] else None
         rows.append({
             "ipo_id": r["ipo_id"], "name": r["corp_name"], "code": r["stock_code"], "list_date": d0,
             "split": _split_of(d0, splits), "offer_price": offer,
-            **_demand_features(demand.get(r["ipo_id"], {})),
+            **dem,
             "offer_amount_bil": sizes.get(r["ipo_id"]),
+            "offer_mcap_bil": offer * listed / 1e8 if listed else None,
+            **{k: extra.get(r["ipo_id"], {}).get(k) for k in EXTRA_KEYS},
+            "d0_mcap_bil": c0 * listed / 1e8 if listed and c0 else None,
+            "d0_float_turnover_pct": b0["volume"] / float_sh * 100 if float_sh and b0.get("volume") else None,
             "d0_open_vs_offer": (b0["open"] / offer - 1) * 100 if b0.get("open") else None,
             "d0_ret_vs_offer": (c0 / offer - 1) * 100 if c0 else None,
             "d0_drop_from_high": (c0 / h0 - 1) * 100 if c0 and h0 else None,

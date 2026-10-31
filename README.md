@@ -47,6 +47,7 @@ python -m ops.daily_job settle 20261116         # 저녁: 청산일이 지난 �
 python -m ops.run_daily morning|afternoon [YYYYMMDD]   # 자동 실행 진입점: 수집→판단→정산→리포트·알림. 전진 시작일(11-16) 전에는 연습 모드(임시 장부)
 python -m ops.launchd install|status|uninstall  # 평일 08:30·15:20 macOS launchd 등록 (맥이 깨어 있어야 함, 늦으면 판단은 무효로 남음)
 python -m ops.report [YYYYMMDD]                 # results/daily/<날짜>.md: 오늘 판단·정산·보호예수 해제 예정·데이터 건강판
+python dart_company.py                          # 회사별 업종코드(DART 기업개황) 수집 → 랩의 업종지수 강도 조건에 사용
 python -m lab.server 20261029                    # 전략 실험 앱 API (127.0.0.1:8765). 화면: cd lab/web && npm install && npm run build 후 같은 주소, 개발은 npm run dev (5173)
 python -m pytest -q                              # 테스트 (키 없이). tests/fixtures_real 은 로컬 전용이라 없으면 건너뛴다
 ```

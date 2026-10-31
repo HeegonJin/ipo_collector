@@ -18,13 +18,14 @@ from urllib.parse import urlsplit
 import yaml
 
 import config
+import dart_company
 from core import settings
 from evaluate.basic_stats import offer_size_bil
 from evaluate.outcomes import BarIndex
-from lab import engine, guards
+from lab import engine, features, guards
 from lab.dataset import build_rows
 from lab.ops_api import Ops
-from store.bars import calendar_bars, iter_filtered_bars, iter_index_bars
+from store.bars import calendar_bars, iter_filtered_bars, iter_index_bars, iter_index_closes
 
 PORT = 8765
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
@@ -102,6 +103,29 @@ class Lab:
 
 
 # ── 실데이터 로더 ────────────────────────────────────────────────
+def _extra_features(universe: list[dict], history_rows: list[dict], index: BarIndex, start: str, end: str) -> dict:
+    history = []
+    for r in history_rows:
+        b0, offer = index.code(r["stock_code"]).get(r["list_dd"]), _offer(r)
+        if b0 and b0.get("close") and offer:
+            history.append({"list_date": r["list_dd"], "ret": (b0["close"] / offer - 1) * 100})
+    series = {name: features.Series(pts) for name, pts in iter_index_closes(start, end).items()}
+    estk = {}
+    for r in universe:
+        p = config.RAW / "dart" / "estk" / f"{r['corp_code']}.json"
+        if r["corp_code"] and p.exists():
+            estk[r["corp_code"]] = json.loads(p.read_text(encoding="utf-8"))
+    return features.build_extra(universe, history, series, estk, dart_company.induty_codes(), settings.load_sector_map())
+
+
+def _offer(r: dict) -> float | None:
+    try:
+        return float(r["offer_price_final"])
+    except (TypeError, ValueError):
+        return None
+
+
+
 def _read_csv(path: Path) -> list[dict]:
     with open(path, encoding="utf-8-sig", newline="") as f:
         return list(csv.DictReader(f))
@@ -113,7 +137,8 @@ def load_real(end: str, start: str | None = None) -> Lab:
     registry = _read_csv(mart / "dart_ipo_registry.csv")
     universe = [r for r in registry if r["in_trading_universe"] == "True" and r["list_dd"]]
     demand = {r["ipo_id"]: r for r in _read_csv(mart / "dart_demand.csv")} if (mart / "dart_demand.csv").exists() else {}
-    codes = {r["stock_code"] for r in universe}
+    history_rows = [r for r in registry if r["list_dd"] and (r["in_trading_universe"] == "True" or r.get("pre_sample") == "True")]
+    codes = {r["stock_code"] for r in history_rows}                # 시장 온도 계산에는 2023-07 이전 상장분도 쓴다 (매매 대상은 아님)
     index = BarIndex(list(iter_filtered_bars(start, end, codes)) + calendar_bars(start, end) + list(iter_index_bars(start, end)))
     splits = settings.load_splits()
     years = sorted({int(r["list_dd"][:4]) for r in universe}) or [2023]
@@ -122,7 +147,8 @@ def load_real(end: str, start: str | None = None) -> Lab:
     for t in _read_csv(mart / "dart_offer_terms.csv"):
         terms.setdefault(t["ipo_id"], []).append(t)
     sizes = {r["ipo_id"]: s for r in universe if (s := offer_size_bil(r, terms.get(r["ipo_id"], []))) is not None}
-    rows = build_rows(universe, index, splits, demand, sizes)
+    extra = _extra_features(universe, history_rows, index, start, end)
+    rows = build_rows(universe, index, splits, demand, sizes, extra)
     cfg = guards.load_lab_config()
     trials = guards.TrialLog(config.META / "lab_trials.csv")
     gate = guards.ValidationGate(rows, costs, trials, config.META / "validation_runs.csv", cfg)
