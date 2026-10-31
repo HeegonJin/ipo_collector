@@ -14,7 +14,7 @@ from pathlib import Path
 import config
 from core import settings
 from evaluate import splits as splitlib
-from evaluate.outcomes import BarIndex
+from evaluate.outcomes import BarIndex, _net
 from store.bars import INDEX_CODE, calendar_bars, iter_filtered_bars, iter_index_bars
 
 MIN_N = 10                                   # 문서: 한 조건에 10건 미만이면 결론을 내지 않는다
@@ -56,7 +56,17 @@ def first_day_type(open_px, close_px, high_px, offer) -> int | None:
     return (1 if near else 2) if high_open else (3 if near else 4)
 
 
-def build_rows(universe: list[dict], terms_by_ipo: dict, demand: dict, index: BarIndex, splits: dict, split: str = "train") -> list[dict]:
+def _net_ret(exit_px: float, entry_px: float, costs: dict, year: int) -> float:
+    """A0 와 같은 비용 공식 (수수료·슬리피지 편도, 연도별 매도세)."""
+    tax = costs["kosdaq_sell_tax"]
+    if year not in tax:
+        raise ValueError(f"매도세율이 없는 연도: {year}")
+    return _net(exit_px, entry_px, (costs["commission_per_side"], costs["slippage_per_side"], tax[year])) * 100
+
+
+def build_rows(universe: list[dict], terms_by_ipo: dict, demand: dict, index: BarIndex, splits: dict, split: str = "train",
+               costs: dict | None = None) -> list[dict]:
+    """costs 를 주면 기간 수익률마다 비용 차감 후 값(`이름|순`)도 계산한다 (상장일 종가 매수 → D+N 종가 매도)."""
     idx = index.code(INDEX_CODE)
     rows = []
     for r in universe:
@@ -78,8 +88,12 @@ def build_rows(universe: list[dict], terms_by_ipo: dict, demand: dict, index: Ba
             if bk and bk.get("close") and i0 and ik and i0.get("close") and ik.get("close"):
                 s, m = (bk["close"] / c0 - 1) * 100, (ik["close"] / i0["close"] - 1) * 100
                 meas[name], meas[name + "|초과"] = s, s - m
+                if costs:
+                    meas[name + "|순"] = _net_ret(bk["close"], c0, costs, int(d0[:4]))
             else:
                 meas[name] = meas[name + "|초과"] = None
+            if costs and name + "|순" not in meas:
+                meas[name + "|순"] = None
         dem = demand.get(r["ipo_id"], {})
         rows.append({
             "name": r["corp_name"], "list_date": d0, "measures": meas,
@@ -135,6 +149,27 @@ def _table(rows: list[dict], key, measures: list[str], excess: bool) -> list[str
     return out
 
 
+def net_cell(vals: list[float]) -> str:
+    """평균 / 중앙값 / 승률 (n). 승률은 비용 차감 후 수익이 0 초과인 비율."""
+    if not vals:
+        return "-"
+    if len(vals) < MIN_N:
+        return f"표본 부족 (n={len(vals)})"
+    wins = sum(v > 0 for v in vals) / len(vals)
+    return f"{st.mean(vals):+.1f}% / {st.median(vals):+.1f}% / 승률 {wins * 100:.0f}% (n={len(vals)})"
+
+
+def _net_table(rows: list[dict], key) -> list[str]:
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(key(r), []).append(r)
+    out = ["| 구분 | 건수 | " + " | ".join(HORIZONS) + " |", "|" + "---|" * (len(HORIZONS) + 2)]
+    for g in sorted(groups):
+        cells = [net_cell([r["measures"][n + "|순"] for r in groups[g] if r["measures"].get(n + "|순") is not None]) for n in HORIZONS]
+        out.append(f"| {g} | {len(groups[g])} | " + " | ".join(cells) + " |")
+    return out
+
+
 def render(rows: list[dict], start: str, end: str, split_text: str) -> str:
     L = ["# 기초 통계 (학습 구간) — 경쟁률·공모 규모·첫날 유형별 수익률 분포", "",
          f"작성 {date.today()} · 자동 생성 초안 · 근거 Notion 기획 문서(아이디에이션) 6장 4번, 설계 v2 검증 원칙", "",
@@ -158,6 +193,12 @@ def render(rows: list[dict], start: str, end: str, split_text: str) -> str:
     L += ["", "## 상장 후 기간 수익률 — 코스닥 대비 초과수익 (D0 종가 기준, 총수익률)"]
     for title, key in GROUPINGS:
         L += ["", f"### {title}"] + _table(rows, key, list(HORIZONS), True)
+    if any("1주(D+5)|순" in r["measures"] for r in rows):
+        L += ["", "## 기간 청산 후보 — 상장일 종가 매수 → D+N 종가 매도 (비용 차감 후)",
+              "전략 B·C의 청산 규칙 후보를 정하기 전에 보는 참고용이다. 매수 조건(시장 반등, 락업 해제 등)은 쓰지 않은 '조건 없이 산 경우'라 B·C의 성과가 아니다. "
+              "수수료·슬리피지(편도)·연도별 매도세를 뺐고 종가로 팔았다고 가정했다. 칸 형식: 평균 / 중앙값 / 승률 (n)."]
+        for title, key in GROUPINGS:
+            L += ["", f"### {title}"] + _net_table(rows, key)
     L += ["", "## 읽을 때 주의",
           "- 표본이 작고 구간을 여러 개 비교하므로 우연히 큰 차이가 날 수 있다. 통계적 유의성은 검정하지 않았다.",
           "- 구간 평균은 이상치(상한가 직행 등)에 크게 흔들린다. 평균과 중앙값이 크게 다르면 중앙값을 먼저 볼 것.",
@@ -178,7 +219,8 @@ def run(end: str, start: str | None = None, split: str = "train", splits: dict |
     demand = {r["ipo_id"]: r for r in _read(mart / "dart_demand.csv")} if (mart / "dart_demand.csv").exists() else {}
     codes = {r["stock_code"] for r in universe}
     index = BarIndex(list(iter_filtered_bars(start, end, codes)) + calendar_bars(start, end) + list(iter_index_bars(start, end)))
-    rows = build_rows(universe, terms, demand, index, splits, split)
+    years = sorted({int(r["list_dd"][:4]) for r in universe}) or [2023]
+    rows = build_rows(universe, terms, demand, index, splits, split, settings.load_costs(years[0], years[-1]))
     s, e = splitlib.window(split, splits)
     split_text = f"{split} ({s}~{'계속' if e == '99991231' else e}, 상장일 기준)"
     out_dir = out_dir or config.ROOT / "results"

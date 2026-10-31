@@ -44,6 +44,20 @@ def test_period_returns_are_from_the_listing_close_and_excess_subtracts_the_inde
     assert m["1개월(D+21)"] is None and m["1개월(D+21)|초과"] is None  # 거래일이 모자라면 비운다 (0 이 아님)
 
 
+def test_net_return_subtracts_costs_and_stays_none_when_the_exit_day_is_missing():
+    costs = {"commission_per_side": 0.0, "slippage_per_side": 0.0, "kosdaq_sell_tax": {2025: 0.002}}
+    idx = index([100.0] + [110.0] * 7, [1000.0] * 8)
+    m = bs.build_rows([reg(offer_price_final="100")], {}, {}, idx, SPLITS, costs=costs)[0]["measures"]
+    assert m["1주(D+5)|순"] == pytest.approx((110 * (1 - 0.002) / 110 - 1) * 100)   # 오르지 않았으니 세금만큼 손해
+    assert m["1개월(D+21)|순"] is None
+    assert "1주(D+5)|순" not in bs.build_rows([reg(offer_price_final="100")], {}, {}, idx, SPLITS)[0]["measures"]   # costs 없으면 계산 안 함
+
+
+def test_net_cell_reports_win_rate():
+    assert bs.net_cell([1.0] * 5 + [-1.0] * 5) == "+0.0% / +0.0% / 승률 50% (n=10)"
+    assert bs.net_cell([1.0]).startswith("표본 부족")
+
+
 def test_valid_split_is_never_opened():
     with pytest.raises(ValueError):
         bs.run("20261029", split="valid")
