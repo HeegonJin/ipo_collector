@@ -11,3 +11,6 @@ lab/web/dist/
 .claude/skills/impeccable/scripts/bin/
 bundle/
 share/d-*/
+lab/web/public/lab_data.json
+lab/web/dist-static/
+share/lab-*/

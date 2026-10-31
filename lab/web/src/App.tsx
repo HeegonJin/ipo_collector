@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Ops from "./Ops";
-import { api, Condition, EvalResult, Meta, Neighbor, Params, Stats, ValidResult } from "./api";
+import { api, IS_STATIC, Condition, EvalResult, Meta, Neighbor, Params, Stats, ValidResult } from "./api";
 
 const pct = (v: number | null | undefined, d = 2) => (v == null ? "-" : `${(v * 100).toFixed(d)}%`);
 const fmt = (v: number, step: number) => (step >= 1 ? v.toFixed(0) : v.toFixed(step < 0.1 ? 2 : 2).replace(/\.?0+$/, ""));
@@ -153,7 +153,7 @@ export default function App() {
   const tabs = (
     <nav className="tabs" role="tablist">
       <button role="tab" aria-selected={tab === "lab"} className={tab === "lab" ? "active" : ""} onClick={() => setTab("lab")}>전략 실험</button>
-      <button role="tab" aria-selected={tab === "ops"} className={tab === "ops" ? "active" : ""} onClick={() => setTab("ops")}>모의 운영</button>
+      {!IS_STATIC && <button role="tab" aria-selected={tab === "ops"} className={tab === "ops" ? "active" : ""} onClick={() => setTab("ops")}>모의 운영</button>}
     </nav>
   );
   if (tab === "ops") return <main><h1>IPO 전략 실험실</h1>{tabs}<Ops /></main>;

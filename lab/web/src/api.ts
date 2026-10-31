@@ -28,6 +28,11 @@ export type ValidResult = {
   lookahead: boolean; warning: string;
 };
 
+import { staticApi } from "./staticApi";
+
+// 서버 없이 정적 사이트로 배포할 때는 `vite build --mode static` — 브라우저 안에서 계산한다 (staticApi.ts)
+export const IS_STATIC = import.meta.env.MODE === "static";
+
 async function request<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(path, body === undefined ? undefined : {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -37,7 +42,7 @@ async function request<T>(path: string, body?: unknown): Promise<T> {
   return data as T;
 }
 
-export const api = {
+const serverApi = {
   meta: () => request<Meta>("/api/meta"),
   count: (params: Params) => request<{ n: number; pool: number }>("/api/count", { params }),
   evaluate: (params: Params) => request<EvalResult>("/api/evaluate", { params }),
@@ -66,3 +71,5 @@ export const opsApi = {
   ledger: () => request<{ items: LedgerItem[]; problems: string[]; rows: number }>("/api/ops/ledger"),
   run: (cmd: string, day: string, allow_stale = false) => request<RunResult>("/api/ops/run", { cmd, day, allow_stale }),
 };
+
+export const api = IS_STATIC ? staticApi : serverApi;

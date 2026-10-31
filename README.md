@@ -37,6 +37,7 @@ python -m evaluate.real_a0 20261029 --split train   # 구간 지정 (train/valid
 python -m evaluate.basic_stats 20261029          # 기초 통계 (학습 구간): 경쟁률·공모 규모·첫날 유형별 수익률 분포 → results/*_기초통계_train_v1.md (비용 전 총수익률, valid 는 열지 않음)
 python -m ops.paper_ledger settle 20261029       # 모의 장부(data/ledger/paper_a0.jsonl)의 청산일이 지난 매수 판단을 정산
 python -m evaluate.swing B_v1 20261029          # 전략 B (config/strategy_B_v1.yaml) 학습 구간 백테스트 (C_v1 도 동일, valid 는 열지 않음)
+python tools/export_lab_data.py 20261029       # 브라우저 전용 실험실용 lab/web/public/lab_data.json (git 제외) → cd lab/web && npm run build:static → dist-static/ 을 추측 못 할 경로로 배포
 python tools/export_bundle.py                  # 스터디 팀원용 데이터 묶음 bundle/*.zip (공개 주소에 올리지 않음, 인증키 없이 앱 실행용)
 python tools/build_share.py                    # 공유용 정적 페이지 share/ (집계 결과만, 종목별 시세 없음) → npx netlify-cli deploy --dir share
 python -m ops.schedule add 20261116 회사이름 0158S0 [공모가]   # 상장 일정 수기 입력 (data/_meta/listing_schedule.csv) / list / check YYYYMMDD
