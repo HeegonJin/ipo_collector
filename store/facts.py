@@ -20,6 +20,27 @@ def _read(path: Path) -> list[dict]:
         return list(csv.DictReader(f))
 
 
+def facts_from_demand_mart(demand_csv: Path) -> list[Fact]:
+    """수요 마트(build_demand_mart) → 전략 B·C 입력 Fact. 교차 검증을 통과(확인)한 값만 확인으로 두고,
+    나머지는 값 없이 미확인으로 둔다 (결측 ≠ 0). 시점은 해당 묶음을 가져온 공시의 접수일 23:59:59 KST."""
+    out = []
+    for r in _read(demand_csv):
+        def add(var, value, status_ok, avail_col, rcept_col, unit):
+            dt = r.get(avail_col)
+            if not dt:
+                return
+            ok = status_ok and value not in (None, "")
+            out.append(Fact(ipo_id=r["ipo_id"], var=var, unit=unit, available_at=dart_available_at(dt),
+                            information_phase=Phase.PRE_LISTING, source_type=SourceType.DART, source_id=r.get(rcept_col, ""),
+                            status=Status.CONFIRMED if ok else Status.UNVERIFIED,
+                            value_num=float(str(value).replace(",", "")) if ok else None,
+                            extractor="dart_demand"))
+        add("demand_ratio", r.get("demand_ratio"), r.get("demand_status") == "확인", "demand_available_dt", "demand_rcept", "배")
+        for p in ("1m", "3m", "6m"):
+            add(f"commit_{p}_qty", r.get(f"commit_{p}_qty"), r.get("commit_status") == "확인", "commit_available_dt", "commit_rcept", "주")
+    return out
+
+
 def facts_from_registry(registry_csv: Path, terms_csv: Path) -> list[Fact]:
     rcept_dt = {t["rcept_no"]: t["rcept_dt"] for t in _read(terms_csv)}
     out = []

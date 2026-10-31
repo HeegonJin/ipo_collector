@@ -42,5 +42,19 @@ def load_lab(config_dir: Path | None = None) -> dict:
     return lab
 
 
+def load_strategy(name: str, config_dir: Path | None = None) -> dict:
+    """전략 규칙 파일 config/strategy_<name>.yaml (예: 'B_v1'). 진입·청산 숫자가 모두 있어야 한다."""
+    if not name.replace("_", "").isalnum():
+        raise ValueError(f"잘못된 전략 이름: {name!r}")
+    cfg = _load(f"strategy_{name}.yaml", config_dir)
+    for key in ("entry", "exit"):
+        if key not in cfg:
+            raise ValueError(f"strategy_{name}.yaml 에 {key} 가 없습니다")
+    for key in ("hold_days", "stop_loss_pct", "take_profit_pct"):
+        if key not in cfg["exit"]:
+            raise ValueError(f"strategy_{name}.yaml 의 exit 에 {key} 가 없습니다")
+    return cfg
+
+
 def load_universe(config_dir: Path | None = None) -> dict:
     return _load("universe_v1.yaml", config_dir)

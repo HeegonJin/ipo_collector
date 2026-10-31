@@ -25,6 +25,8 @@ class Settlement:
     exit_kind: str = "정상"                     # 정상 | 거래정지 | 폐지 | 미도래(청산일이 아직 오지 않음)
     net_ret_last_close: float | None = None     # 거래정지: 재개 후 첫 시가 / 폐지: 마지막 종가로 청산했다면
     net_ret_wipeout: float | None = None        # 전손(-100%) 가정
+    exit_date: str | None = None                # 가변 청산(전략 B·C)의 실제 청산일. A0 는 비워 둔다
+    exit_reason: str | None = None              # 기간 | 손절 | 익절
 
 
 class BarIndex:
