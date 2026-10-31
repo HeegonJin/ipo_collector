@@ -73,3 +73,33 @@ export const opsApi = {
 };
 
 export const api = IS_STATIC ? staticApi : serverApi;
+
+export type Knob = { path: string; label: string; min: number; max: number; step: number; default: number };
+export type StrategyInfo = { id: string; label: string; knobs: Knob[]; yaml: string | null };
+export type MaskedStats =
+  | { n: number; insufficient: true; min_n: number }
+  | { n: number; insufficient: false; mean: number; median: number; win_rate: number; avg_win: number; avg_loss: number; p10: number; worst: number };
+export type BacktestResult = {
+  strategy: string; label: string; version: string; overrides: Record<string, number>; exploratory: boolean;
+  signals: number; no_fill: number; pending: number; limit_up_excluded: number;
+  stats: MaskedStats; baseline_a0: MaskedStats; excess_vs_kosdaq: MaskedStats;
+  concentration: { verdict: string; mean_without_top: number | null };
+  by_reason: Record<string, MaskedStats>; exit_kinds: Record<string, number>;
+  trials: { distinct: number; chance_best: number; warn: boolean; warn_at: number };
+  trades: { name: string; signal_date: string; entry_date: string; exit_date: string | null; reason: string | null; kind: string | null; net_ret: number; bench_ret: number | null }[];
+  costs: { commission_per_side: number; slippage_per_side: number; kosdaq_sell_tax: Record<string, number> };
+  doc: string;
+};
+export type PitFact = { var: string; value: string | number | null; status: string; available_at: string; source_id: string; phase: string };
+export type PitCard = {
+  ipo_id: string; name: string; as_of: string; list_date: string; visible: PitFact[]; hidden: PitFact[];
+  signals: { strategy: string; action: string; reasons: string[] }[]; bars_visible: number; note: string;
+};
+
+export const strategyApi = {
+  catalog: () => request<{ strategies: StrategyInfo[]; min_n: number }>("/api/strategies"),
+  ipos: () => request<{ ipos: { ipo_id: string; name: string; list_date: string; split: string }[] }>("/api/ipos"),
+  run: (strategy: string, overrides: Record<string, number>) => request<BacktestResult>("/api/strategy/run", { strategy, overrides }),
+  card: (ipo_id: string, as_of: string) => request<PitCard>("/api/strategy/card", { ipo_id, as_of }),
+  basicStats: () => request<{ doc: string; file: string | null }>("/api/basic_stats"),
+};

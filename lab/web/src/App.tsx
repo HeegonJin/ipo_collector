@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Ops from "./Ops";
+import Strategies from "./Strategies";
 import { api, IS_STATIC, Condition, EvalResult, Meta, Neighbor, Params, Stats, ValidResult } from "./api";
 
 const pct = (v: number | null | undefined, d = 2) => (v == null ? "-" : `${(v * 100).toFixed(d)}%`);
@@ -101,7 +102,7 @@ function Robustness({ r }: { r: EvalResult["robustness"] }) {
 }
 
 export default function App() {
-  const [tab, setTab] = useState<"lab" | "ops">("lab");
+  const [tab, setTab] = useState<"lab" | "bt" | "ops">("lab");
   const [meta, setMeta] = useState<Meta | null>(null);
   const [params, setParams] = useState<Params | null>(null);
   const [count, setCount] = useState<number | null>(null);
@@ -153,9 +154,11 @@ export default function App() {
   const tabs = (
     <nav className="tabs" role="tablist">
       <button role="tab" aria-selected={tab === "lab"} className={tab === "lab" ? "active" : ""} onClick={() => setTab("lab")}>전략 실험</button>
+      {!IS_STATIC && <button role="tab" aria-selected={tab === "bt"} className={tab === "bt" ? "active" : ""} onClick={() => setTab("bt")}>전략 백테스트</button>}
       {!IS_STATIC && <button role="tab" aria-selected={tab === "ops"} className={tab === "ops" ? "active" : ""} onClick={() => setTab("ops")}>모의 운영</button>}
     </nav>
   );
+  if (tab === "bt") return <main><h1>IPO 전략 실험실</h1>{tabs}<Strategies /></main>;
   if (tab === "ops") return <main><h1>IPO 전략 실험실</h1>{tabs}<Ops /></main>;
 
   return (

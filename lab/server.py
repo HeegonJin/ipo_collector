@@ -25,6 +25,8 @@ from evaluate.outcomes import BarIndex
 from lab import engine, features, guards
 from lab.dataset import build_rows
 from lab.ops_api import Ops
+from lab.strategy_api import StrategyLab
+from store.facts import facts_from_demand_mart, facts_from_registry
 from store.bars import calendar_bars, iter_filtered_bars, iter_index_bars, iter_index_closes
 
 PORT = 8765
@@ -36,9 +38,20 @@ WEB_DIST = Path(__file__).resolve().parent / "web" / "dist"
 class Lab:
     """API 핸들러 모음. HTTP 와 분리해 두어 화면 없이 테스트한다."""
 
-    def __init__(self, rows, costs, trials: guards.TrialLog, gate: guards.ValidationGate, cfg: dict, meta: dict | None = None):
+    def __init__(self, rows, costs, trials: guards.TrialLog, gate: guards.ValidationGate, cfg: dict, meta: dict | None = None,
+                 strategies: StrategyLab | None = None):
         self.rows, self.costs, self.trials, self.gate, self.cfg = rows, costs, trials, gate, cfg
         self._meta = meta or {}
+        self.strategies = strategies
+
+    def _need_strategies(self) -> StrategyLab:
+        if self.strategies is None:
+            raise ValueError("전략 백테스트는 실데이터로 켠 서버에서만 쓸 수 있습니다")
+        return self.strategies
+
+    def basic_stats(self) -> dict:
+        files = sorted((config.ROOT / "results").glob("*기초통계_train*.md"))
+        return {"doc": files[-1].read_text(encoding="utf-8") if files else "", "file": files[-1].name if files else None}
 
     def meta(self) -> dict:
         splits = {}
@@ -152,8 +165,11 @@ def load_real(end: str, start: str | None = None) -> Lab:
     cfg = guards.load_lab_config()
     trials = guards.TrialLog(config.META / "lab_trials.csv")
     gate = guards.ValidationGate(rows, costs, trials, config.META / "validation_runs.csv", cfg)
+    facts = facts_from_registry(mart / "dart_ipo_registry.csv", mart / "dart_offer_terms.csv") + \
+        (facts_from_demand_mart(mart / "dart_demand.csv") if (mart / "dart_demand.csv").exists() else [])
+    strat = StrategyLab(universe, facts, index, settings.load_costs(years[0], int(end[:4])), splits, trials, cfg, start, end)
     meta = {"data_end": end, "splits": {k: splits[k] for k in ("train", "valid", "forward")}}
-    return Lab(rows, costs, trials, gate, cfg, meta)
+    return Lab(rows, costs, trials, gate, cfg, meta, strat)
 
 
 # ── HTTP ────────────────────────────────────────────────────────
@@ -167,8 +183,12 @@ def _host_ok(value: str | None) -> bool:
 def make_server(lab: Lab, port: int = PORT, ops: Ops | None = None) -> ThreadingHTTPServer:
     ops = ops or Ops()
     get_routes = {"/api/meta": lambda: lab.meta(), "/api/trials": lambda: lab.trials_view(),
+                  "/api/strategies": lambda: lab._need_strategies().catalog(), "/api/ipos": lambda: {"ipos": lab._need_strategies().ipos()},
+                  "/api/basic_stats": lambda: lab.basic_stats(),
                   "/api/ops/schedule": lambda: ops.schedule_view(), "/api/ops/ledger": lambda: ops.ledger_view()}
     post_routes = {
+        "/api/strategy/run": lambda b: lab._need_strategies().run(b["strategy"], b.get("overrides")),
+        "/api/strategy/card": lambda b: lab._need_strategies().pit_card(b["ipo_id"], b["as_of"]),
         "/api/count": lambda b: lab.count(b["params"]),
         "/api/evaluate": lambda b: lab.evaluate(b["params"]),
         "/api/validate": lambda b: lab.validate(b["params"], b.get("confirm", "")),
