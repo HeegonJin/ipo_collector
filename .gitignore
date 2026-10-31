@@ -10,3 +10,4 @@ lab/web/dist/
 .netlify/
 .claude/skills/impeccable/scripts/bin/
 bundle/
+share/d-*/
