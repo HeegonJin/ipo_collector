@@ -36,6 +36,11 @@ python -m evaluate.real_a0 20261026              # 4) 실데이터 A0 결과 (re
 python -m evaluate.real_a0 20261029 --split train   # 구간 지정 (train/valid/forward/all). valid 는 열 때마다 data/_meta/validation_runs.csv 에 기록, 2번째부터 경고
 python -m evaluate.basic_stats 20261029          # 기초 통계 (학습 구간): 경쟁률·공모 규모·첫날 유형별 수익률 분포 → results/*_기초통계_train_v1.md (비용 전 총수익률, valid 는 열지 않음)
 python -m ops.paper_ledger settle 20261029       # 모의 장부(data/ledger/paper_a0.jsonl)의 청산일이 지난 매수 판단을 정산
+python -m evaluate.swing B_v1 20261029          # 전략 B (config/strategy_B_v1.yaml) 학습 구간 백테스트 (C_v1 도 동일, valid 는 열지 않음)
+python -m ops.schedule add 20261116 회사이름 0158S0 [공모가]   # 상장 일정 수기 입력 (data/_meta/listing_schedule.csv) / list / check YYYYMMDD
+python -m ops.daily_job swing 20261116          # 매일 08:30~08:35: 전략 B·C 판단 (전 거래일 KRX 수집 선행) → 장부 기록
+python -m ops.daily_job a0 20261116             # 상장일 15:20~15:25: 수기 일정의 오늘 상장 종목 A0 판단
+python -m ops.daily_job settle 20261116         # 저녁: 청산일이 지난 판단 정산 (A0·B·C 한 장부)
 python -m lab.server 20261029                    # 전략 실험 앱 API (127.0.0.1:8765). 화면: cd lab/web && npm install && npm run build 후 같은 주소, 개발은 npm run dev (5173)
 python -m pytest -q                              # 테스트 (키 없이). tests/fixtures_real 은 로컬 전용이라 없으면 건너뛴다
 ```

@@ -26,6 +26,7 @@ class SourceType(str, Enum):
     DART = "DART"
     KIWOOM = "KIWOOM"
     DERIVED = "DERIVED"
+    MANUAL = "MANUAL"   # 사람이 직접 입력한 값 (상장 예정일 등). 입력한 시각이 available_at 이다
 
 
 @dataclass(frozen=True)

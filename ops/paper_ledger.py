@@ -11,10 +11,15 @@ from datetime import datetime
 from core import settings
 from core.ids import make_temp_ipo_id
 from decide.runner import Decision
+import config
 from evaluate.outcomes import BarIndex, settle
+from evaluate.swing import settle_swing
 from ledger.ledger import Ledger
 from store.bars import calendar_bars, iter_filtered_bars, iter_index_bars
 from strategies import a0
+
+
+LEDGER_PATH = config.DATA / "ledger" / "paper_a0.jsonl"     # 이름은 A0 로 시작했지만 B·C 판단·정산도 같은 장부에 쌓는다
 
 
 def record_decisions(ledger: Ledger, decisions: list[Decision], wallclock: datetime) -> list[str]:
@@ -45,7 +50,8 @@ def settle_due(ledger: Ledger, index: BarIndex, costs: dict, settled_at: datetim
     for r in rows:
         if r["type"] != "decision" or r["action"] != "매수" or not r["valid"] or r["ledger_id"] in done:
             continue
-        s = settle(decision_from_row(r), index, costs)
+        d = decision_from_row(r)
+        s = settle(d, index, costs) if d.strategy == a0.NAME else settle_swing(d, index, costs)   # A0 는 D1 시가 고정, B·C 는 규칙 파일의 가변 청산
         if s.exit_kind == "미도래":
             continue
         ledger.append_settlement(r["ledger_id"], s, settled_at)
@@ -53,10 +59,12 @@ def settle_due(ledger: Ledger, index: BarIndex, costs: dict, settled_at: datetim
     return n
 
 
-def costs_for(rows: list[dict]) -> dict:
-    """장부의 매수 판단이 걸친 연도를 모두 덮는 비용 설정."""
+def costs_for(rows: list[dict], last_year: int | None = None) -> dict:
+    """장부의 매수 판단이 걸친 연도를 모두 덮는 비용 설정. B·C 는 상장 몇 달 뒤에 청산하므로 데이터 마지막 연도(last_year)까지 덮는다."""
     years = sorted({int(r["listing_date"][:4]) for r in rows if r["type"] == "decision" and r["listing_date"]})
-    return settings.load_costs(years[0], years[-1]) if years else settings.load_costs(2023, 2023)
+    if not years:
+        return settings.load_costs(2023, 2023)
+    return settings.load_costs(years[0], max(years[-1], last_year or years[-1]))
 
 
 def settle_from_raw(ledger: Ledger, end: str, settled_at: datetime) -> int:
@@ -68,7 +76,7 @@ def settle_from_raw(ledger: Ledger, end: str, settled_at: datetime) -> int:
     start = min(r["listing_date"] for r in buys)
     index = BarIndex(list(iter_filtered_bars(start, end, {r["short_code"] for r in buys}))
                      + calendar_bars(start, end) + list(iter_index_bars(start, end)))
-    return settle_due(ledger, index, costs_for(rows), settled_at)
+    return settle_due(ledger, index, costs_for(rows, int(end[:4])), settled_at)
 
 
 if __name__ == "__main__":
