@@ -48,10 +48,11 @@ def _demand_features(d: dict) -> dict:
     }
 
 
-def build_rows(universe: list[dict], index: BarIndex, splits: dict, demand: dict | None = None) -> list[dict]:
-    """universe: 레지스트리 CSV 행(매매 대상), demand: {ipo_id: 수요 마트 행} (data/2_mart/dart_demand.csv).
-    상장일 시세가 없는 종목은 건너뛴다."""
-    demand = demand or {}
+def build_rows(universe: list[dict], index: BarIndex, splits: dict, demand: dict | None = None,
+               sizes: dict | None = None) -> list[dict]:
+    """universe: 레지스트리 CSV 행(매매 대상), demand: {ipo_id: 수요 마트 행} (data/2_mart/dart_demand.csv),
+    sizes: {ipo_id: 공모 규모(억원)} (모르면 키 없음 → None). 상장일 시세가 없는 종목은 건너뛴다."""
+    demand, sizes = demand or {}, sizes or {}
     idx = index.code(INDEX_CODE)
     rows = []
     for r in universe:
@@ -71,6 +72,8 @@ def build_rows(universe: list[dict], index: BarIndex, splits: dict, demand: dict
             "ipo_id": r["ipo_id"], "name": r["corp_name"], "code": r["stock_code"], "list_date": d0,
             "split": _split_of(d0, splits), "offer_price": offer,
             **_demand_features(demand.get(r["ipo_id"], {})),
+            "offer_amount_bil": sizes.get(r["ipo_id"]),
+            "d0_open_vs_offer": (b0["open"] / offer - 1) * 100 if b0.get("open") else None,
             "d0_ret_vs_offer": (c0 / offer - 1) * 100 if c0 else None,
             "d0_drop_from_high": (c0 / h0 - 1) * 100 if c0 and h0 else None,
             "d0_index_chg": (i0["close"] / ip["close"] - 1) * 100 if i0 and ip and i0["close"] and ip["close"] else None,

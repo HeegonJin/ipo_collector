@@ -19,6 +19,7 @@ import yaml
 
 import config
 from core import settings
+from evaluate.basic_stats import offer_size_bil
 from evaluate.outcomes import BarIndex
 from lab import engine, guards
 from lab.dataset import build_rows
@@ -116,7 +117,11 @@ def load_real(end: str, start: str | None = None) -> Lab:
     splits = settings.load_splits()
     years = sorted({int(r["list_dd"][:4]) for r in universe}) or [2023]
     costs = settings.load_costs(years[0], years[-1])
-    rows = build_rows(universe, index, splits, demand)
+    terms: dict[str, list[dict]] = {}
+    for t in _read_csv(mart / "dart_offer_terms.csv"):
+        terms.setdefault(t["ipo_id"], []).append(t)
+    sizes = {r["ipo_id"]: s for r in universe if (s := offer_size_bil(r, terms.get(r["ipo_id"], []))) is not None}
+    rows = build_rows(universe, index, splits, demand, sizes)
     cfg = guards.load_lab_config()
     trials = guards.TrialLog(config.META / "lab_trials.csv")
     gate = guards.ValidationGate(rows, costs, trials, config.META / "validation_runs.csv", cfg)

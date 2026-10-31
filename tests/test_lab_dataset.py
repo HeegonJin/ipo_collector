@@ -63,9 +63,15 @@ def test_unconfirmed_or_missing_demand_values_are_none_not_zero():
     assert one(demand=dem(demand_ratio=""))["demand_ratio"] is None
 
 
-def test_design_external_features_are_gone():
-    r = one(demand=dem())
-    assert "band_pos" not in r and "offer_amount_bil" not in r
+def test_offer_size_comes_from_the_given_map_and_is_none_when_unknown():
+    assert "band_pos" not in one(demand=dem())                                 # 밴드 위치는 설계도 밖이라 뺀 채로
+    rows = build_rows([reg()], make_index(), SPLITS, None, {"I1": 264.0})
+    assert rows[0]["offer_amount_bil"] == 264.0
+    assert one(demand=dem())["offer_amount_bil"] is None                        # 모르면 0 이 아니라 None
+
+
+def test_open_vs_offer_is_the_listing_day_open_against_the_offer_price():
+    assert one()["d0_open_vs_offer"] == pytest.approx((10100 / 10000 - 1) * 100)   # D0 = 두 번째 날, 시가 10100
 
 
 def test_listing_day_values_are_percent_changes_with_the_index_from_the_previous_day():

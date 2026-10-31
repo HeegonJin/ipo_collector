@@ -32,8 +32,9 @@ def test_every_condition_is_labelled_with_its_phase_and_whether_the_design_doc_h
     by = {c["id"]: c for c in CONDITIONS}
     for cid in ("demand_ratio", "retail_ratio", "final_commit_pct", "float_pct"):       # 설계도 M1 변수, 상장 전 확정
         assert by[cid]["phase"] == "pre" and by[cid]["in_design"] is True
-    assert "band_pos" not in by and "offer_amount_bil" not in by                    # 설계도에 없는 조건은 뺐다
-    for cid in ("d0_ret_vs_offer", "d0_drop_from_high", "d0_index_chg"):
+    assert "band_pos" not in by                                                      # 설계도에 없는 조건은 뺐다
+    assert by["offer_amount_bil"]["phase"] == "pre" and by["offer_amount_bil"]["in_design"] is True   # 설계도 M1 '유통물량·금액'
+    for cid in ("d0_open_vs_offer", "d0_ret_vs_offer", "d0_drop_from_high", "d0_index_chg"):
         assert by[cid]["phase"] == "d0" and by[cid]["in_design"] is True
 
 

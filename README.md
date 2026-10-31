@@ -34,6 +34,7 @@ python build_dart_registry.py 20230101 20261027 20261026   # 3) 레지스트리 
 python build_demand_mart.py 20230101 20261029    # 3') 수요 지표 마트 (data/2_mart/dart_demand.csv): 수요예측 경쟁률·확약·유통가능·락업 일정·일반청약 경쟁률
 python -m evaluate.real_a0 20261026              # 4) 실데이터 A0 결과 (results/*_A0_real_v1.md)
 python -m evaluate.real_a0 20261029 --split train   # 구간 지정 (train/valid/forward/all). valid 는 열 때마다 data/_meta/validation_runs.csv 에 기록, 2번째부터 경고
+python -m evaluate.basic_stats 20261029          # 기초 통계 (학습 구간): 경쟁률·공모 규모·첫날 유형별 수익률 분포 → results/*_기초통계_train_v1.md (비용 전 총수익률, valid 는 열지 않음)
 python -m ops.paper_ledger settle 20261029       # 모의 장부(data/ledger/paper_a0.jsonl)의 청산일이 지난 매수 판단을 정산
 python -m lab.server 20261029                    # 전략 실험 앱 API (127.0.0.1:8765). 화면: cd lab/web && npm install && npm run build 후 같은 주소, 개발은 npm run dev (5173)
 python -m pytest -q                              # 테스트 (키 없이). tests/fixtures_real 은 로컬 전용이라 없으면 건너뛴다
@@ -41,7 +42,7 @@ python -m pytest -q                              # 테스트 (키 없이). tests
 기존 흐름(`build_sample.py` → `dart_api.py` → `report.py`)도 그대로 동작한다.
 
 ## 전략 실험 앱 (`lab/`)
-조건(수요예측·청약 경쟁률, 확약률, 유통가능 비율 — 수요 마트의 상장 전 공시 값 / 상장일 값)·진입 시점(D0 종가/D1 시가)·보유(D+1/3/5)를 사람이 바꿔 보며 학습 구간(train)에서 비용 차감 후 수익률을 본다. 과적합 장치 4가지(`config/lab_v1.yaml`, 사람이 고정):
+조건(수요예측·청약 경쟁률, 확약률, 유통가능 비율, 공모 규모 — 상장 전 공시 값 / 상장일 값: 시초가·종가의 공모가 대비, 고점 대비 종가, 코스닥 등락률)·진입 시점(D0 종가/D1 시가)·보유(D+1/3/5)를 사람이 바꿔 보며 학습 구간(train)에서 비용 차감 후 수익률을 본다. 과적합 장치 4가지(`config/lab_v1.yaml`, 사람이 고정):
 최소 표본 수(미만이면 숫자 숨김) · 시도 횟수 카운터(`data/_meta/lab_trials.csv`, 우연 기대 최고 평균 표시) · 이웃 구간 견고성 · 검증 구간 잠금(확인 문구 + 학습에서 실행한 조건만, `validation_runs.csv` 기록).
 상장일 마감 후 값 + D0 종가 진입은 look-ahead 라 '상한 추정'으로, 설계도에 없는 조건은 '설계도 외 탐색'으로 화면에 표시한다. 조건 없음 + D0 종가 + D+1 = A0 기준선과 같아야 한다(train n=136, 평균 −0.11%).
 서버는 127.0.0.1 전용(Host/Origin 검사)이고 데이터를 밖으로 내보내지 않는다 (KRX 약관 Art.11(2)).
